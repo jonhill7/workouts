@@ -387,28 +387,27 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .cal-title { font-weight: 500; font-size: 16px; }
 .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
 .cal-cell {
-  min-height: 44px;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 3px; border-radius: 8px; padding: 0;
+  min-height: 42px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 8px; padding: 0;
 }
 .cal-wd { min-height: 22px; color: var(--muted); font-size: 11px; font-weight: 600; }
-.cal-day:active { background: var(--hairline); }
+.cal-day:active { filter: brightness(0.92); }
 .cal-num { font-size: 14px; line-height: 1; }
-.cal-today .cal-num { color: var(--accent); font-weight: 700; }
-.cal-selected { background: var(--accent); }
-.cal-selected .cal-num { color: var(--accent-ink); font-weight: 600; }
-.cal-selected .cal-dot { background: var(--accent-ink); }
-.cal-dot { background: var(--accent); border-radius: 50%; flex: none; }
-.cal-dot-space { width: 8px; height: 8px; }
-.cal-dot-1 { width: 4px; height: 4px; margin: 2px; }
-.cal-dot-2 { width: 6px; height: 6px; margin: 1px; }
-.cal-dot-3 { width: 8px; height: 8px; }
+.cal-today .cal-num { font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+.cal-selected { outline: 2px solid var(--ink); outline-offset: -2px; }
+/* GitHub-style intensity tiers (shared by day cells and legend swatches) */
+.cal-h1 { background: color-mix(in srgb, var(--accent) 18%, var(--surface)); }
+.cal-h2 { background: color-mix(in srgb, var(--accent) 40%, var(--surface)); }
+.cal-h3 { background: color-mix(in srgb, var(--accent) 68%, var(--surface)); color: var(--accent-ink); }
+.cal-h4 { background: var(--accent); color: var(--accent-ink); }
 .cal-legend {
-  display: flex; align-items: center; justify-content: center; gap: 6px;
+  display: flex; align-items: center; justify-content: center; gap: 4px;
   color: var(--muted); font-size: 12px; margin-top: 12px;
 }
-.cal-legend .cal-dot-1, .cal-legend .cal-dot-2 { margin: 0; }
-.cal-legend .cal-dot + * { margin-right: 6px; }
+.cal-swatch { width: 14px; height: 14px; border-radius: 4px; flex: none; }
+.cal-legend .cal-h1 { margin-left: 6px; }
+.cal-legend .cal-h4 { margin-right: 6px; }
 
 /* ---- chips (exercise sort) ---- */
 .chip-row { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px 14px 6px; }

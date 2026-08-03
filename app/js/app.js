@@ -4,7 +4,7 @@ import { loadSqlJs, looksLikeSQLite, parseFitNotesDB } from './fitnotes-db.js';
 import * as exporter from './exporter.js';
 import { renderLineChart } from './charts.js';
 
-export const APP_VERSION = '1.4.0';
+export const APP_VERSION = '1.4.1';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
@@ -464,12 +464,12 @@ async function openCalendar() {
     for (let d = 1; d <= daysInMonth; d++) {
       const ds = `${y}-${p(m)}-${p(d)}`;
       const n = counts.get(ds) || 0;
-      const tier = n === 0 ? 0 : n < 10 ? 1 : n < 20 ? 2 : 3;
+      // GitHub-style intensity: shade the cell by how many sets were logged
+      const tier = n === 0 ? 0 : n < 5 ? 1 : n < 10 ? 2 : n < 20 ? 3 : 4;
       cells += `
-        <button class="cal-cell cal-day${ds === state.date ? ' cal-selected' : ''}${ds === todayStr() ? ' cal-today' : ''}"
+        <button class="cal-cell cal-day${tier ? ` cal-h${tier}` : ''}${ds === state.date ? ' cal-selected' : ''}${ds === todayStr() ? ' cal-today' : ''}"
           data-date="${ds}" ${n ? `title="${n} sets"` : ''}>
           <span class="cal-num">${d}</span>
-          ${tier ? `<span class="cal-dot cal-dot-${tier}"></span>` : '<span class="cal-dot-space"></span>'}
         </button>`;
     }
     root.innerHTML = `
@@ -483,9 +483,9 @@ async function openCalendar() {
         ${cells}
       </div>
       <div class="cal-legend">
-        <span class="cal-dot cal-dot-1"></span> 1–9 sets
-        <span class="cal-dot cal-dot-2"></span> 10–19
-        <span class="cal-dot cal-dot-3"></span> 20+
+        Fewer sets
+        <span class="cal-swatch cal-h1"></span><span class="cal-swatch cal-h2"></span><span class="cal-swatch cal-h3"></span><span class="cal-swatch cal-h4"></span>
+        More
       </div>`;
     root.querySelectorAll('[data-cal]').forEach(b => b.onclick = () => {
       let ny = y, nm = m + parseInt(b.dataset.cal, 10);
