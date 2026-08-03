@@ -123,6 +123,44 @@ test('tab-delimited export is auto-detected', () => {
   assert.equal(rows[0].weightKg, 100);
 });
 
+test('unquoted comma in exercise name is repaired (user-reported fragments)', () => {
+  const csv = 'Date,Exercise,Category,Weight,Weight Unit,Reps,Distance,Distance Unit,Time\n' +
+    '2026-01-05,Pull Up (Assisted, 145 - Weight),Back,145,lbs,8,,,\n' +
+    '2026-01-06,Squat (Tempo, 3-0-3 Seconds),Legs,185,lbs,5,,,\n' +
+    '2026-01-07,Lunge (Rear, Left),Legs,50,lbs,10,,,\n' +
+    '2026-01-08,Calf Raise (Toes 45°Out, 5 Sec),Legs,90,lbs,12,,,\n';
+  const { rows, errors } = parseFitNotesCSV(csv);
+  assert.equal(errors.length, 0);
+  assert.deepEqual(rows.map(r => r.exercise), [
+    'Pull Up (Assisted, 145 - Weight)',
+    'Squat (Tempo, 3-0-3 Seconds)',
+    'Lunge (Rear, Left)',
+    'Calf Raise (Toes 45°Out, 5 Sec)',
+  ]);
+  assert.deepEqual(rows.map(r => r.category), ['Back', 'Legs', 'Legs', 'Legs']);
+  assert.equal(rows[0].reps, 8);
+  assert.ok(Math.abs(rows[1].weightKg - 185 * KG_PER_LB) < 1e-9);
+});
+
+test('two unquoted commas in one exercise name', () => {
+  const csv = 'Date,Exercise,Category,Weight,Weight Unit,Reps,Distance,Distance Unit,Time\n' +
+    '2026-01-05,Lunge (Rear, Left, Slow),Legs,50,lbs,10,,,\n';
+  const { rows } = parseFitNotesCSV(csv);
+  assert.equal(rows[0].exercise, 'Lunge (Rear, Left, Slow)');
+  assert.equal(rows[0].category, 'Legs');
+});
+
+test('unquoted commas split correctly between exercise and comment', () => {
+  const csv = 'Date,Exercise,Category,Weight,Weight Unit,Reps,Distance,Distance Unit,Time,Comment\n' +
+    '2026-01-05,Squat (Pause, 3s),Legs,100,kg,5,,,,tough day, felt tired\n';
+  const { rows, errors } = parseFitNotesCSV(csv);
+  assert.equal(errors.length, 0);
+  assert.equal(rows[0].exercise, 'Squat (Pause, 3s)');
+  assert.equal(rows[0].category, 'Legs');
+  assert.equal(rows[0].weightKg, 100);
+  assert.equal(rows[0].comment, 'tough day, felt tired');
+});
+
 test('rejects a non-FitNotes file', () => {
   const { rows, errors } = parseFitNotesCSV('foo,bar\n1,2\n');
   assert.equal(rows.length, 0);
