@@ -78,6 +78,51 @@ test('inferType: cardio without reps → distance_time, lifting → weight_reps'
   assert.equal(inferType(bench), 'weight_reps');
 });
 
+test('interior quotes (inch marks) stay literal and do not shift columns', () => {
+  const rows = parseCSV('a,Box Jump (24"),c\nd,e,f\n');
+  assert.deepEqual(rows, [['a', 'Box Jump (24")', 'c'], ['d', 'e', 'f']]);
+});
+
+test('exercise name with inch mark imports with correct category', () => {
+  const csv = 'Date,Exercise,Category,Weight,Weight Unit,Reps,Distance,Distance Unit,Time\n' +
+    '2026-01-05,Chin Up (45" band - weight),Back,145,lbs,8,,,\n' +
+    '2026-01-05,Flat Barbell Bench Press,Chest,185,lbs,5,,,\n';
+  const { rows, errors } = parseFitNotesCSV(csv);
+  assert.equal(errors.length, 0);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].exercise, 'Chin Up (45" band - weight)');
+  assert.equal(rows[0].category, 'Back');
+  assert.ok(Math.abs(rows[0].weightKg - 145 * KG_PER_LB) < 1e-9);
+  assert.equal(rows[0].reps, 8);
+  assert.equal(rows[1].category, 'Chest');
+});
+
+test('no-comment-column header (Date..Time) parses', () => {
+  const csv = 'Date,Exercise,Category,Weight,Weight Unit,Reps,Distance,Distance Unit,Time\n' +
+    '2026-01-05,Deadlift,Back,315,lbs,5,,,\n';
+  const { rows, errors } = parseFitNotesCSV(csv);
+  assert.equal(errors.length, 0);
+  assert.equal(rows[0].comment, '');
+  assert.ok(Math.abs(rows[0].weightKg - 315 * KG_PER_LB) < 1e-9);
+});
+
+test('UTF-8 BOM before header is ignored', () => {
+  const csv = '﻿Date,Exercise,Category,Weight,Weight Unit,Reps,Distance,Distance Unit,Time\n' +
+    '2026-01-05,Deadlift,Back,315,lbs,5,,,\n';
+  const { rows, errors } = parseFitNotesCSV(csv);
+  assert.equal(errors.length, 0);
+  assert.equal(rows.length, 1);
+});
+
+test('tab-delimited export is auto-detected', () => {
+  const tsv = 'Date\tExercise\tCategory\tWeight\tWeight Unit\tReps\tDistance\tDistance Unit\tTime\n' +
+    '2026-01-05\tBench, Close Grip\tChest\t100\tkg\t5\t\t\t\n';
+  const { rows, errors } = parseFitNotesCSV(tsv);
+  assert.equal(errors.length, 0);
+  assert.equal(rows[0].exercise, 'Bench, Close Grip');
+  assert.equal(rows[0].weightKg, 100);
+});
+
 test('rejects a non-FitNotes file', () => {
   const { rows, errors } = parseFitNotesCSV('foo,bar\n1,2\n');
   assert.equal(rows.length, 0);

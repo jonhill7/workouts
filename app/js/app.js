@@ -3,7 +3,7 @@ import { KG_PER_LB, parseFitNotesCSV, setKey, inferType, timeToString, parseTime
 import * as exporter from './exporter.js';
 import { renderLineChart } from './charts.js';
 
-export const APP_VERSION = '1.1.0';
+export const APP_VERSION = '1.1.1';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
