@@ -44,16 +44,17 @@ export function buildCSV({ sets, exercises, categories, unit }) {
   return lines.join('\r\n') + '\r\n';
 }
 
-export function buildJSONBackup({ categories, exercises, sets, settings, appVersion }) {
+export function buildJSONBackup({ categories, exercises, sets, routines, settings, appVersion }) {
   return JSON.stringify({
     app: 'workout-log',
-    format: 1,
+    format: 2,
     appVersion,
     exportedAt: new Date().toISOString(),
     settings,
     categories,
     exercises,
     sets,
+    routines: routines || [],
   });
 }
 

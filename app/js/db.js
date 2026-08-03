@@ -1,7 +1,7 @@
 // IndexedDB wrapper — all persistence lives here.
 
 const DB_NAME = 'workout-log';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // v2: routines store
 
 let _db = null;
 
@@ -11,16 +11,27 @@ export function openDB() {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
-      const cats = db.createObjectStore('categories', { keyPath: 'id', autoIncrement: true });
-      cats.createIndex('nameLower', 'nameLower', { unique: true });
-      const ex = db.createObjectStore('exercises', { keyPath: 'id', autoIncrement: true });
-      ex.createIndex('nameLower', 'nameLower', { unique: true });
-      ex.createIndex('categoryId', 'categoryId');
-      const sets = db.createObjectStore('sets', { keyPath: 'id', autoIncrement: true });
-      sets.createIndex('date', 'date');
-      sets.createIndex('exerciseId', 'exerciseId');
-      sets.createIndex('exerciseDate', ['exerciseId', 'date']);
-      db.createObjectStore('settings', { keyPath: 'key' });
+      if (!db.objectStoreNames.contains('categories')) {
+        const cats = db.createObjectStore('categories', { keyPath: 'id', autoIncrement: true });
+        cats.createIndex('nameLower', 'nameLower', { unique: true });
+      }
+      if (!db.objectStoreNames.contains('exercises')) {
+        const ex = db.createObjectStore('exercises', { keyPath: 'id', autoIncrement: true });
+        ex.createIndex('nameLower', 'nameLower', { unique: true });
+        ex.createIndex('categoryId', 'categoryId');
+      }
+      if (!db.objectStoreNames.contains('sets')) {
+        const sets = db.createObjectStore('sets', { keyPath: 'id', autoIncrement: true });
+        sets.createIndex('date', 'date');
+        sets.createIndex('exerciseId', 'exerciseId');
+        sets.createIndex('exerciseDate', ['exerciseId', 'date']);
+      }
+      if (!db.objectStoreNames.contains('settings')) {
+        db.createObjectStore('settings', { keyPath: 'key' });
+      }
+      if (!db.objectStoreNames.contains('routines')) {
+        db.createObjectStore('routines', { keyPath: 'id', autoIncrement: true });
+      }
     };
     req.onsuccess = () => { _db = req.result; resolve(_db); };
     req.onerror = () => reject(req.error);

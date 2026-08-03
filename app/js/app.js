@@ -1,9 +1,10 @@
 import * as db from './db.js';
 import { KG_PER_LB, parseFitNotesCSV, setKey, inferType, timeToString, parseTimeToSeconds } from './importer.js';
+import { loadSqlJs, looksLikeSQLite, parseFitNotesDB } from './fitnotes-db.js';
 import * as exporter from './exporter.js';
 import { renderLineChart } from './charts.js';
 
-export const APP_VERSION = '1.3.1';
+export const APP_VERSION = '1.4.0';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
@@ -87,6 +88,7 @@ const DEFAULT_SETTINGS = {
   weightIncrement: 5,     // in display units
   restSeconds: 90,
   autoBackup: 'weekly',   // 'off' | 'daily' | 'weekly'
+  exSort: 'az',           // exercise list order: 'az' | 'recent' | 'most'
   lastBackupAt: 0,
   backupSnoozedUntil: 0,
   seeded: false,
@@ -130,14 +132,14 @@ function describeCols(s, type) {
   return [`${fmtWeight(s.weight)} ${getUnit()}`, `${s.reps} reps`];
 }
 
-function setRowHTML(s, type, i, extra = '') {
+function setRowHTML(s, type, i, extra = '', isPR = false) {
   const [a, b] = describeCols(s, type);
   return `
     <div class="set-row ${extra}" ${extra ? `data-set="${s.id}"` : ''}>
       <span class="set-num">${i + 1}</span>
       <span class="set-w">${esc(a)}</span>
       <span class="set-r">${esc(b)}</span>
-      ${s.comment ? '<span class="set-comment-dot" title="has comment">✎</span>' : '<span></span>'}
+      <span class="set-flags">${isPR ? '<span class="pr-flag" title="Personal record">🏆</span>' : ''}${s.comment ? '<span class="set-comment-dot" title="has comment">✎</span>' : ''}</span>
     </div>`;
 }
 
@@ -145,6 +147,37 @@ function est1RM(weightKg, reps) {
   if (reps <= 0 || weightKg <= 0) return 0;
   if (reps === 1) return weightKg;
   return weightKg * (1 + reps / 30); // Epley
+}
+
+// PR detection. Walk the exercise's sets in chronological order; a strength
+// set is a PR when its weight beats every earlier weight lifted for the same
+// or more reps ("you've never lifted this much for this many reps"). Cardio:
+// longest distance ever (or longest duration for distance-less sets). The
+// very first record for an exercise never counts.
+function computePRIds(sortedSets, type) {
+  const ids = new Set();
+  if (type === 'distance_time') {
+    let bestDist = 0, bestTime = 0;
+    for (const s of sortedSets) {
+      if (s.distance > 0) {
+        if (bestDist > 0 && s.distance > bestDist) ids.add(s.id);
+        bestDist = Math.max(bestDist, s.distance);
+      } else if (s.time > 0) {
+        if (bestTime > 0 && s.time > bestTime) ids.add(s.id);
+        bestTime = Math.max(bestTime, s.time);
+      }
+    }
+    return ids;
+  }
+  const bestByReps = new Map();
+  for (const s of sortedSets) {
+    if (!(s.weight > 0) || !(s.reps > 0)) continue;
+    let prev = 0;
+    for (const [r, w] of bestByReps) if (r >= s.reps && w > prev) prev = w;
+    if (prev > 0 && s.weight > prev + 1e-9) ids.add(s.id);
+    if (s.weight > (bestByReps.get(s.reps) || 0)) bestByReps.set(s.reps, s.weight);
+  }
+  return ids;
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +215,7 @@ async function seedIfNeeded() {
 const state = {
   date: todayStr(),
   stack: [],
+  pickFor: null, // { routineId, depth } while picking an exercise for a routine
 };
 
 function currentView() { return state.stack[state.stack.length - 1]; }
@@ -198,8 +232,11 @@ function replaceView(fn) {
   rerender();
 }
 
-window.addEventListener('popstate', () => {
-  if (state.stack.length > 1) state.stack.pop();
+window.addEventListener('popstate', e => {
+  // Each pushed entry carries its stack depth, so multi-step history.go(-n)
+  // jumps (used by the routine exercise picker) unwind correctly too.
+  const depth = e.state?.depth || 1;
+  state.stack.length = Math.max(1, Math.min(state.stack.length, depth));
   rerender();
 });
 
@@ -264,10 +301,10 @@ function backupDue() {
 }
 
 async function gatherBackupData() {
-  const [categories, exercises, sets] = await Promise.all([
-    db.getAll('categories'), db.getAll('exercises'), db.getAll('sets'),
+  const [categories, exercises, sets, routines] = await Promise.all([
+    db.getAll('categories'), db.getAll('exercises'), db.getAll('sets'), db.getAll('routines'),
   ]);
-  return { categories, exercises, sets };
+  return { categories, exercises, sets, routines };
 }
 
 async function doBackupDownload() {
@@ -345,9 +382,17 @@ async function renderHome() {
     byEx.get(s.exerciseId).sets.push(s);
   }
 
+  // PR trophies need each exercise's full history
+  const prByEx = new Map();
+  await Promise.all(groups.map(async g => {
+    if (!g.exercise) return;
+    prByEx.set(g.exercise.id, computePRIds(await setsForExercise(g.exercise.id), g.exercise.type));
+  }));
+
   const groupsHtml = groups.map(g => {
     if (!g.exercise) return '';
-    const rows = g.sets.map((s, i) => setRowHTML(s, g.exercise.type, i)).join('');
+    const prIds = prByEx.get(g.exercise.id) || new Set();
+    const rows = g.sets.map((s, i) => setRowHTML(s, g.exercise.type, i, '', prIds.has(s.id))).join('');
     return `
       <div class="exercise-group" data-ex="${g.exercise.id}">
         <div class="wgroup-name">${esc(g.exercise.name)}</div>
@@ -359,6 +404,7 @@ async function renderHome() {
     ${header({
       title: 'Workout Log',
       right: `${state.date !== todayStr() ? '<button class="icon-btn" id="today-btn" title="Go to today">↺</button>' : ''}
+              <button class="icon-btn" id="routines-btn" aria-label="Routines">📋</button>
               <button class="icon-btn" id="cal-btn" aria-label="Pick date">📅</button>
               <button class="icon-btn" id="settings-btn" aria-label="Settings">⚙</button>`,
     })}
@@ -388,6 +434,7 @@ async function renderHome() {
   root.querySelector('#cal-btn').onclick = openCalendar;
   root.querySelector('#today-btn')?.addEventListener('click', () => { state.date = todayStr(); rerender(); });
   root.querySelector('#settings-btn').onclick = () => pushView(renderSettings);
+  root.querySelector('#routines-btn').onclick = () => pushView(renderRoutines);
   root.querySelector('#fab-add').onclick = () => pushView(renderExercisePicker);
   root.querySelectorAll('.exercise-group').forEach(card => card.onclick = () => {
     const ex = exById.get(parseInt(card.dataset.ex, 10));
@@ -485,6 +532,35 @@ function recencyInfo(last) {
   return { label, cls };
 }
 
+const EX_SORTS = [['az', 'A–Z'], ['recent', 'Recent'], ['most', 'Most used']];
+
+function sortExercises(list, stats, mode) {
+  const cmp = {
+    az: (a, b) => a.name.localeCompare(b.name),
+    recent: (a, b) =>
+      (stats.get(b.id)?.last || '').localeCompare(stats.get(a.id)?.last || '') ||
+      a.name.localeCompare(b.name),
+    most: (a, b) =>
+      (stats.get(b.id)?.days.size || 0) - (stats.get(a.id)?.days.size || 0) ||
+      a.name.localeCompare(b.name),
+  };
+  return [...list].sort(cmp[mode] || cmp.az);
+}
+
+function sortChipsHTML() {
+  return `<div class="chip-row sort-row">
+    ${EX_SORTS.map(([id, label]) =>
+      `<button class="chip ${S.exSort === id ? 'chip-active' : ''}" data-sort="${id}">${label}</button>`).join('')}
+  </div>`;
+}
+
+function wireSortChips(root) {
+  root.querySelectorAll('[data-sort]').forEach(b => b.onclick = async () => {
+    await setSetting('exSort', b.dataset.sort);
+    rerender();
+  });
+}
+
 function exerciseRowHTML(e, st, hidden = false) {
   let stats;
   if (st) {
@@ -519,7 +595,8 @@ async function renderExercisePicker() {
       <span class="row-chevron">›</span>
     </div>`).join('');
 
-  const exRows = exercises.map(e => exerciseRowHTML(e, stats.get(e.id), true)).join('');
+  const exRows = sortExercises(exercises, stats, S.exSort)
+    .map(e => exerciseRowHTML(e, stats.get(e.id), true)).join('');
 
   $app().innerHTML = `
     ${header({
@@ -559,7 +636,7 @@ async function renderCategoryExercises(categoryId) {
   const [exercises, stats] = await Promise.all([
     db.getAllByIndex('exercises', 'categoryId', categoryId), exerciseStatsMap(),
   ]);
-  exercises.sort((a, b) => a.name.localeCompare(b.name));
+  const sorted = sortExercises(exercises, stats, S.exSort);
 
   $app().innerHTML = `
     ${header({
@@ -567,21 +644,39 @@ async function renderCategoryExercises(categoryId) {
       right: `<button class="icon-btn" id="new-ex" title="New exercise">＋</button>`,
     })}
     <main class="content">
-      ${exercises.map(e => exerciseRowHTML(e, stats.get(e.id))).join('') ||
+      ${sortChipsHTML()}
+      ${sorted.map(e => exerciseRowHTML(e, stats.get(e.id))).join('') ||
         '<div class="empty-state"><p>No exercises in this category.</p></div>'}
     </main>`;
 
   const root = $app();
   wireHeader(root);
+  wireSortChips(root);
   root.querySelector('#new-ex').onclick = () => exerciseEditor(null, categoryId);
   wireExerciseRows(root);
 }
 
 function wireExerciseRows(root) {
   root.querySelectorAll('.picker-row').forEach(row => {
-    row.addEventListener('click', e => {
+    row.addEventListener('click', async e => {
       if (e.target.closest('[data-edit]')) return;
       const id = parseInt(row.dataset.ex, 10);
+      if (state.pickFor) {
+        // picking an exercise for a routine: add it, then unwind back to the
+        // routine screen however deep into the picker we are
+        const { routineId, depth } = state.pickFor;
+        state.pickFor = null;
+        const routine = await db.get('routines', routineId);
+        if (routine) {
+          if (!routine.exerciseIds.includes(id)) {
+            routine.exerciseIds.push(id);
+            await db.put('routines', routine);
+          }
+          toast('Added to routine');
+        }
+        history.go(-(state.stack.length - depth));
+        return;
+      }
       pushView(() => renderExercise(id, 'track'));
     });
   });
@@ -610,6 +705,9 @@ async function exerciseEditor(existing, defaultCategoryId) {
         <option value="distance_time" ${existing?.type === 'distance_time' ? 'selected' : ''}>Distance / Time</option>
       </select>
     </label>
+    <label class="field-label">Notes (setup, seat height, band color…)
+      <textarea id="exe-notes" class="text-input notes-input" rows="3">${esc(existing?.notes || '')}</textarea>
+    </label>
     <div class="modal-actions">
       ${existing ? '<button class="btn btn-danger" data-act="delete">Delete</button>' : ''}
       <span class="flex-spacer"></span>
@@ -626,6 +724,7 @@ async function exerciseEditor(existing, defaultCategoryId) {
       nameLower: name.toLowerCase(),
       categoryId: parseInt(el.querySelector('#exe-cat').value, 10),
       type: el.querySelector('#exe-type').value,
+      notes: el.querySelector('#exe-notes').value.trim(),
     };
     try {
       await db.put('exercises', rec);
@@ -749,8 +848,9 @@ async function renderExercise(exerciseId, tab) {
 
 async function renderTrackTab(body, ex) {
   const isCardio = ex.type === 'distance_time';
-  const daySets = (await db.getAllByIndex('sets', 'exerciseDate', [ex.id, state.date]))
-    .sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
+  const allSets = await setsForExercise(ex.id);
+  const prIds = computePRIds(allSets, ex.type);
+  const daySets = allSets.filter(s => s.date === state.date);
   const draft = trackDraft[ex.id] || {};
   let selectedId = draft.selectedId && daySets.some(s => s.id === draft.selectedId) ? draft.selectedId : null;
 
@@ -768,15 +868,15 @@ async function renderTrackTab(body, ex) {
   if (selectedId) fillFrom(daySets.find(s => s.id === selectedId));
   else if (draft.weight !== undefined) pre = { ...pre, ...draft };
   else if (daySets.length) fillFrom(daySets[daySets.length - 1]);
-  else {
-    const hist = await setsForExercise(ex.id);
-    if (hist.length) fillFrom(hist[hist.length - 1]);
-  }
+  else if (allSets.length) fillFrom(allSets[allSets.length - 1]);
   if (selectedId) pre.comment = daySets.find(s => s.id === selectedId)?.comment || '';
 
   const inc = S.weightIncrement || (isMetric() ? 2.5 : 5);
 
   body.innerHTML = `
+    <button class="ex-note" id="ex-note">${ex.notes
+      ? `📝 <span class="ex-note-text">${esc(ex.notes)}</span>`
+      : '<span class="ex-note-empty">📝 Add note</span>'}</button>
     <div class="track-wrap">
     <div class="track-date">${esc(fmtDateLong(state.date))}</div>
     ${isCardio ? `
@@ -826,8 +926,24 @@ async function renderTrackTab(body, ex) {
     </div>
     <div class="set-list">
       ${daySets.map((s, i) =>
-        setRowHTML(s, ex.type, i, 'set-row-tappable' + (s.id === selectedId ? ' set-row-selected' : ''))).join('')}
+        setRowHTML(s, ex.type, i, 'set-row-tappable' + (s.id === selectedId ? ' set-row-selected' : ''), prIds.has(s.id))).join('')}
     </div>`;
+
+  body.querySelector('#ex-note').onclick = () => {
+    const { el, close } = openModal(`
+      <h3>Note — ${esc(ex.name)}</h3>
+      <textarea id="note-text" class="text-input notes-input" rows="4" placeholder="Seat height, band color, grip…">${esc(ex.notes || '')}</textarea>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" data-act="cancel">Cancel</button>
+        <button class="btn btn-primary" data-act="save">Save</button>
+      </div>`);
+    el.querySelector('[data-act=cancel]').onclick = close;
+    el.querySelector('[data-act=save]').onclick = async () => {
+      await db.put('exercises', { ...ex, notes: el.querySelector('#note-text').value.trim() });
+      close();
+      rerender();
+    };
+  };
 
   const val = id => body.querySelector(id)?.value ?? '';
   const readInputs = () => ({
@@ -879,8 +995,10 @@ async function renderTrackTab(body, ex) {
     const v = readInputs();
     if (!isCardio && v.reps <= 0) { toast('Enter at least 1 rep'); return; }
     if (isCardio && v.dist <= 0 && v.time <= 0) { toast('Enter a distance or time'); return; }
-    await db.put('sets', buildRecord({ seq: nextSeq() }));
+    const newId = await db.put('sets', buildRecord({ seq: nextSeq() }));
     delete trackDraft[ex.id];
+    const after = await setsForExercise(ex.id);
+    if (computePRIds(after, ex.type).has(newId)) toast('🏆 New personal record!');
     if (S.restSeconds > 0 && !isCardio) restTimer.start(S.restSeconds);
     rerender();
   });
@@ -916,6 +1034,7 @@ async function renderHistoryTab(body, ex) {
     body.innerHTML = '<div class="empty-state"><p>No sets logged yet.</p></div>';
     return;
   }
+  const prIds = computePRIds(sets, ex.type);
   const byDate = new Map();
   for (const s of sets) {
     if (!byDate.has(s.date)) byDate.set(s.date, []);
@@ -942,7 +1061,7 @@ async function renderHistoryTab(body, ex) {
             <span class="set-num">${i + 1}</span>
             <span class="set-w">${esc(a)}</span>
             <span class="set-r">${esc(b)}</span>
-            <span></span>
+            <span class="set-flags">${prIds.has(s.id) ? '<span class="pr-flag" title="Personal record">🏆</span>' : ''}</span>
             ${s.comment ? `<span class="set-comment">${esc(s.comment)}</span>` : ''}
           </div>`;
         }).join('')}
@@ -1129,6 +1248,128 @@ async function renderRecordsTab(body, ex) {
 }
 
 // ---------------------------------------------------------------------------
+// Routines — ordered exercise lists; work down the list on gym day.
+
+async function renderRoutines() {
+  const routines = await db.getAll('routines');
+  routines.sort((a, b) => a.name.localeCompare(b.name));
+  $app().innerHTML = `
+    ${header({ title: 'Routines', showBack: true })}
+    <main class="content">
+      <button class="btn btn-ghost btn-block" id="new-routine">＋ New routine</button>
+      ${routines.map(r => `
+        <div class="list-row" data-routine="${r.id}">
+          <span class="row-label">${esc(r.name)}<span class="row-sub">${r.exerciseIds.length} exercises</span></span>
+          <button class="icon-btn" data-editroutine="${r.id}">⋮</button>
+        </div>`).join('') ||
+        '<div class="empty-state"><p>No routines yet.</p><p class="empty-sub">Create one, or import your FitNotes backup — routines come with it.</p></div>'}
+    </main>`;
+  const root = $app();
+  wireHeader(root);
+  root.querySelector('#new-routine').onclick = () => routineEditor(null);
+  root.querySelectorAll('[data-routine]').forEach(row => row.onclick = e => {
+    if (e.target.closest('[data-editroutine]')) return;
+    const id = parseInt(row.dataset.routine, 10);
+    pushView(() => renderRoutine(id));
+  });
+  root.querySelectorAll('[data-editroutine]').forEach(b => b.onclick = async () => {
+    const r = await db.get('routines', parseInt(b.dataset.editroutine, 10));
+    if (r) routineEditor(r);
+  });
+}
+
+function routineEditor(existing) {
+  const { el, close } = openModal(`
+    <h3>${existing ? 'Edit Routine' : 'New Routine'}</h3>
+    <label class="field-label">Name
+      <input type="text" id="rt-name" class="text-input" value="${esc(existing?.name || '')}" autocomplete="off">
+    </label>
+    <div class="modal-actions">
+      ${existing ? '<button class="btn btn-danger" data-act="delete">Delete</button>' : ''}
+      <span class="flex-spacer"></span>
+      <button class="btn btn-ghost" data-act="cancel">Cancel</button>
+      <button class="btn btn-primary" data-act="save">Save</button>
+    </div>`);
+  el.querySelector('[data-act=cancel]').onclick = close;
+  el.querySelector('[data-act=save]').onclick = async () => {
+    const name = el.querySelector('#rt-name').value.trim();
+    if (!name) { toast('Name is required'); return; }
+    const rec = existing ? { ...existing, name } : { name, exerciseIds: [] };
+    const id = await db.put('routines', rec);
+    close();
+    if (!existing) pushView(() => renderRoutine(id));
+    else rerender();
+  };
+  el.querySelector('[data-act=delete]')?.addEventListener('click', async () => {
+    const ok = await confirmDialog({
+      title: `Delete ${existing.name}?`,
+      body: 'The routine is removed; logged sets are not affected.',
+      okLabel: 'Delete', danger: true,
+    });
+    if (!ok) return;
+    await db.del('routines', existing.id);
+    close();
+    rerender();
+  });
+}
+
+async function renderRoutine(routineId) {
+  const routine = await db.get('routines', routineId);
+  if (!routine) { back(); return; }
+  const [exercises, daySets] = await Promise.all([allExercises(), setsForDate(state.date)]);
+  const exById = new Map(exercises.map(e => [e.id, e]));
+  const doneToday = new Map();
+  for (const s of daySets) doneToday.set(s.exerciseId, (doneToday.get(s.exerciseId) || 0) + 1);
+
+  $app().innerHTML = `
+    ${header({
+      title: esc(routine.name), showBack: true,
+      right: '<button class="icon-btn" id="rt-add" title="Add exercise">＋</button>',
+    })}
+    <main class="content">
+      <div class="setting-note">${esc(fmtDateHeading(state.date))} — tap an exercise to log it. ✓ = logged today.</div>
+      ${routine.exerciseIds.map((id, i) => {
+        const ex = exById.get(id);
+        if (!ex) return '';
+        const n = doneToday.get(id) || 0;
+        return `
+          <div class="list-row routine-row" data-ex="${id}">
+            <span class="rt-done ${n ? 'rt-done-yes' : ''}">${n ? '✓' : ''}</span>
+            <span class="row-label">${esc(ex.name)}${n ? `<span class="row-sub">${n} set${n === 1 ? '' : 's'}</span>` : ''}</span>
+            <button class="icon-btn rt-move" data-move="${i}:-1" aria-label="Move up">▲</button>
+            <button class="icon-btn rt-move" data-move="${i}:1" aria-label="Move down">▼</button>
+            <button class="icon-btn" data-remove="${i}" aria-label="Remove">✕</button>
+          </div>`;
+      }).join('') || '<div class="empty-state"><p>Empty routine.</p><p class="empty-sub">Tap ＋ to add exercises.</p></div>'}
+    </main>`;
+
+  const root = $app();
+  wireHeader(root);
+  root.querySelector('#rt-add').onclick = () => {
+    state.pickFor = { routineId, depth: state.stack.length };
+    pushView(renderExercisePicker);
+  };
+  root.querySelectorAll('.routine-row').forEach(row => row.onclick = e => {
+    if (e.target.closest('.icon-btn')) return;
+    const id = parseInt(row.dataset.ex, 10);
+    pushView(() => renderExercise(id, 'track'));
+  });
+  root.querySelectorAll('[data-move]').forEach(b => b.onclick = async () => {
+    const [i, d] = b.dataset.move.split(':').map(Number);
+    const j = i + d;
+    if (j < 0 || j >= routine.exerciseIds.length) return;
+    [routine.exerciseIds[i], routine.exerciseIds[j]] = [routine.exerciseIds[j], routine.exerciseIds[i]];
+    await db.put('routines', routine);
+    rerender();
+  });
+  root.querySelectorAll('[data-remove]').forEach(b => b.onclick = async () => {
+    routine.exerciseIds.splice(parseInt(b.dataset.remove, 10), 1);
+    await db.put('routines', routine);
+    rerender();
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Rest timer
 
 const restTimer = {
@@ -1260,6 +1501,84 @@ async function handleCSVImport(file) {
   el.querySelector('[data-act=ok]').onclick = () => { el.parentElement.remove(); rerender(); };
 }
 
+// Import a .fitnotes backup (SQLite database): logged sets (deduped against
+// prior CSV imports), exercise notes, and routines.
+async function handleFitNotesDBImport(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (!looksLikeSQLite(bytes)) {
+    toast('Not a .fitnotes backup (not an SQLite file)');
+    return;
+  }
+  toast('Reading backup…');
+  let parsed;
+  try {
+    const SQL = await loadSqlJs();
+    const sdb = new SQL.Database(bytes);
+    try { parsed = parseFitNotesDB(sdb); } finally { sdb.close(); }
+  } catch (e) {
+    openModal(`<h3>Import failed</h3><p class="modal-body">${esc(e.message)}</p>
+      <div class="modal-actions"><button class="btn btn-primary" onclick="this.closest('.modal-backdrop').remove()">OK</button></div>`);
+    return;
+  }
+
+  const stats = await applyImport(parsed.rows);
+
+  // exercise notes — never overwrite a note already written in this app
+  let notesApplied = 0;
+  for (const ex of await db.getAll('exercises')) {
+    const n = parsed.exerciseNotes.get(ex.nameLower);
+    if (n && !ex.notes) {
+      await db.put('exercises', { ...ex, notes: n });
+      notesApplied++;
+    }
+  }
+
+  // routines — skip ones whose name already exists; create any exercises a
+  // routine references that have no logged sets (they exist only as
+  // definitions in the backup)
+  let routinesAdded = 0;
+  const haveRoutines = new Set((await db.getAll('routines')).map(r => r.name.toLowerCase()));
+  const backupCategory = new Map(parsed.allExercises.map(e => [e.name.toLowerCase(), e.category]));
+  const cats = await db.getAll('categories');
+  const catByName = new Map(cats.map(c => [c.nameLower, c]));
+  const exByName = new Map((await db.getAll('exercises')).map(e => [e.nameLower, e]));
+  for (const r of parsed.routines) {
+    if (haveRoutines.has(r.name.toLowerCase())) continue;
+    const ids = [];
+    for (const name of r.exercises) {
+      const key = name.toLowerCase();
+      let ex = exByName.get(key);
+      if (!ex) {
+        const catName = backupCategory.get(key) || 'Other';
+        let cat = catByName.get(catName.toLowerCase());
+        if (!cat) {
+          const id = await db.put('categories', { name: catName, nameLower: catName.toLowerCase(), sort: 50 });
+          cat = { id, name: catName, nameLower: catName.toLowerCase() };
+          catByName.set(cat.nameLower, cat);
+        }
+        ex = { name, nameLower: key, categoryId: cat.id, type: 'weight_reps' };
+        ex.id = await db.put('exercises', ex);
+        exByName.set(key, ex);
+      }
+      if (!ids.includes(ex.id)) ids.push(ex.id);
+    }
+    if (ids.length) {
+      await db.put('routines', { name: r.name, exerciseIds: ids });
+      routinesAdded++;
+    }
+  }
+
+  const { el } = openModal(`
+    <h3>Backup imported</h3>
+    <p class="modal-body">
+      ${stats.imported} sets imported · ${stats.duplicates} duplicates skipped<br>
+      ${stats.newExercises} new exercises · ${stats.newCategories} new categories<br>
+      ${notesApplied} exercise notes · ${routinesAdded} routines
+    </p>
+    <div class="modal-actions"><button class="btn btn-primary" data-act="ok">Done</button></div>`);
+  el.querySelector('[data-act=ok]').onclick = () => { el.parentElement.remove(); rerender(); };
+}
+
 async function handleJSONRestore(file) {
   let data;
   try {
@@ -1281,9 +1600,11 @@ async function handleJSONRestore(file) {
   await db.clearStore('sets');
   await db.clearStore('exercises');
   await db.clearStore('categories');
+  await db.clearStore('routines');
   await db.bulkPut('categories', data.categories || []);
   await db.bulkPut('exercises', data.exercises || []);
   await db.bulkPut('sets', data.sets);
+  await db.bulkPut('routines', data.routines || []);
   if (data.settings) {
     for (const k of ['unit', 'weightIncrement', 'restSeconds', 'autoBackup']) {
       if (data.settings[k] !== undefined) await setSetting(k, data.settings[k]);
@@ -1328,6 +1649,7 @@ async function renderSettings() {
 
       <div class="settings-section">Import</div>
       <button class="btn btn-ghost btn-block" id="import-csv-btn">Import FitNotes CSV export</button>
+      <button class="btn btn-ghost btn-block" id="import-db-btn">Import .fitnotes backup (sets, notes, routines)</button>
       <button class="btn btn-ghost btn-block" id="restore-json-btn">Restore JSON backup</button>
       <p class="setting-note">In FitNotes: Settings → Data Management → Export Workout Data (CSV), then open the file here. Re-importing is safe — duplicates are skipped.</p>
 
@@ -1337,6 +1659,7 @@ async function renderSettings() {
       <button class="btn btn-danger btn-block" id="delete-all">Delete all data</button>
       <p class="setting-note center">Workout Log v${APP_VERSION}</p>
       <input type="file" id="file-csv" accept=".csv,text/csv" class="visually-hidden">
+      <input type="file" id="file-db" class="visually-hidden">
       <input type="file" id="file-json" accept=".json,application/json" class="visually-hidden">
     </main>`;
 
@@ -1359,10 +1682,13 @@ async function renderSettings() {
   root.querySelector('#export-csv').onclick = doExportCSV;
 
   const fileCsv = root.querySelector('#file-csv');
+  const fileDb = root.querySelector('#file-db');
   const fileJson = root.querySelector('#file-json');
   root.querySelector('#import-csv-btn').onclick = () => fileCsv.click();
+  root.querySelector('#import-db-btn').onclick = () => fileDb.click();
   root.querySelector('#restore-json-btn').onclick = () => fileJson.click();
   fileCsv.onchange = () => { if (fileCsv.files[0]) handleCSVImport(fileCsv.files[0]); fileCsv.value = ''; };
+  fileDb.onchange = () => { if (fileDb.files[0]) handleFitNotesDBImport(fileDb.files[0]); fileDb.value = ''; };
   fileJson.onchange = () => { if (fileJson.files[0]) handleJSONRestore(fileJson.files[0]); fileJson.value = ''; };
 
   root.querySelector('#delete-all').onclick = async () => {
@@ -1381,6 +1707,7 @@ async function renderSettings() {
     await db.clearStore('sets');
     await db.clearStore('exercises');
     await db.clearStore('categories');
+    await db.clearStore('routines');
     await setSetting('seeded', false);
     await seedIfNeeded();
     toast('All data deleted');

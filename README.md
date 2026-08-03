@@ -39,11 +39,24 @@ one). Import is **idempotent**: re-importing the same file skips duplicates
 (matching is by full-value multiset, so two genuinely identical sets in one
 workout are preserved).
 
+Alternatively, **Import .fitnotes backup** reads FitNotes' full backup file
+(Settings → Data Management → Backup) — a SQLite database opened in-browser
+via the vendored sql.js/WASM engine. It imports logged sets (deduped against
+any prior CSV import), per-exercise notes, and routines.
+
 ## Features
 
-- Daily workout log with date navigation; log weight×reps or distance/time
-  (cardio) sets with comments
-- Exercise catalog grouped by category, search, custom exercises/categories
+- Daily workout log with date navigation and a calendar (workout days get a
+  dot sized by set count); log weight×reps or distance/time (cardio) sets
+  with comments
+- Exercise catalog grouped by category, search, custom exercises/categories,
+  per-exercise notes (setup, seat height…), workout-count + recency stats,
+  and A–Z / Recent / Most-used sorting
+- **PR detection**: 🏆 marks any set that beats your previous best weight at
+  the same or higher reps (longest distance/duration for cardio), with a
+  toast the moment you log one
+- **Routines**: ordered exercise lists (📋 on the log screen) with logged-
+  today checkmarks — imported from FitNotes backups too
 - Per-exercise **History**, **Graph** (max weight, est. 1RM, volume, reps —
   or distance/time/pace for cardio; 3M/6M/1Y/All ranges), and **Records**
   (PRs, rep records table)
@@ -69,6 +82,7 @@ avoids, so backups are one tap instead:
 
 ```sh
 node tests/importer.test.mjs        # unit tests for the CSV import logic
+node tests/fitnotes-db.test.mjs     # unit tests for the .fitnotes SQLite parser
 python3 -m http.server -d app 8000  # run locally at http://localhost:8000
 ```
 
@@ -84,9 +98,9 @@ drives boot → log set → import → graph → export round-trip.
 
 ## Roadmap ideas
 
-- Import the `.fitnotes` full backup file directly (it's a SQLite database —
-  needs sql.js/WASM)
+- Analytics dashboard (weekly volume per category, streaks, year heatmap,
+  recent-PR feed)
 - Body-weight & measurement tracking with graphs
-- Workout routines/templates and supersets
+- Supersets
 - PWA share-target so FitNotes/Files can "share" a CSV straight into the app
 - Optional Google Drive API sync for true automatic backup
