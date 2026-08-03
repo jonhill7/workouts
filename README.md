@@ -65,53 +65,10 @@ avoids, so backups are one tap instead:
 - **Settings → Export CSV** — FitNotes-compatible, so you can always go back
   or analyze in a spreadsheet.
 
-## Strava sync (runs & rides)
-
-One-way sync, Strava → app: a scheduled GitHub Action
-(`.github/workflows/strava-sync.yml`, every 6 hours) pulls your activities
-into `app/data/strava.json`; the app merges anything new into the local log
-on launch (deduped by Strava activity id, so edits and re-syncs are safe).
-Strength activities (WeightTraining etc.) are skipped — those live in this
-app. There is no Runkeeper integration: Runkeeper's public API was
-discontinued; bridge Runkeeper → Strava with a service like tapiriik if
-needed.
-
-**Privacy:** `app/data/strava.json` is committed to this public repo, so the
-dates, distances and durations of synced activities are public. Activity
-*names* are stripped by default; opt in by adding a repository variable
-`STRAVA_INCLUDE_NAMES` = `true`. Your strength/FitNotes data never leaves
-your phone.
-
-One-time setup (~10 minutes):
-
-1. Create your own Strava API app at <https://www.strava.com/settings/api>
-   (any name; Authorization Callback Domain: `localhost`). Note the
-   **Client ID** and **Client Secret**.
-2. Authorize it — open this URL in a browser (fill in your client id):
-
-       https://www.strava.com/oauth/authorize?client_id=CLIENT_ID&response_type=code&redirect_uri=http://localhost/exchange_token&approval_prompt=force&scope=activity:read_all
-
-   Approve; you land on an unreachable localhost URL — copy the `code=...`
-   value out of the address bar.
-3. Exchange the code for a refresh token (any terminal):
-
-       curl -X POST https://www.strava.com/oauth/token \
-         -d client_id=CLIENT_ID -d client_secret=CLIENT_SECRET \
-         -d code=CODE_FROM_STEP_2 -d grant_type=authorization_code
-
-   Note the `refresh_token` in the response.
-4. In the repo: Settings → Secrets and variables → Actions → **New repository
-   secret**, three times: `STRAVA_CLIENT_ID`, `STRAVA_CLIENT_SECRET`,
-   `STRAVA_REFRESH_TOKEN`.
-5. Actions tab → **Strava Sync** → Run workflow. The first run backfills your
-   full history; open the app afterwards and it will report the synced
-   activities. Subsequent runs are automatic.
-
 ## Development
 
 ```sh
 node tests/importer.test.mjs        # unit tests for the CSV import logic
-node tests/strava.test.mjs          # unit tests for the Strava sync mapping
 python3 -m http.server -d app 8000  # run locally at http://localhost:8000
 ```
 

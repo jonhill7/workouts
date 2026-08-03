@@ -3,7 +3,7 @@ import { KG_PER_LB, parseFitNotesCSV, setKey, inferType, timeToString, parseTime
 import * as exporter from './exporter.js';
 import { renderLineChart } from './charts.js';
 
-export const APP_VERSION = '1.3.0';
+export const APP_VERSION = '1.3.1';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
@@ -1294,66 +1294,10 @@ async function handleJSONRestore(file) {
 }
 
 // ---------------------------------------------------------------------------
-// Strava sync — the repo's scheduled workflow publishes data/strava.json;
-// merge anything new into the local log, deduped by Strava activity id.
-
-async function syncStravaData() {
-  if (!navigator.onLine) return;
-  let data;
-  try {
-    const res = await fetch('data/strava.json', { cache: 'no-store' });
-    if (!res.ok) return;
-    data = await res.json();
-  } catch {
-    return; // offline or file not published yet
-  }
-  if (!Array.isArray(data.activities)) return;
-
-  const sets = await db.getAll('sets');
-  const have = new Set(sets.map(s => s.stravaId).filter(Boolean));
-  const fresh = data.activities.filter(a => a && a.id && a.date && !have.has(a.id));
-  if (!fresh.length) return;
-
-  const categories = await db.getAll('categories');
-  const exercises = await db.getAll('exercises');
-  const catByName = new Map(categories.map(c => [c.nameLower, c]));
-  const exByName = new Map(exercises.map(e => [e.nameLower, e]));
-
-  let cardio = catByName.get('cardio');
-  if (!cardio) {
-    const id = await db.put('categories', { name: 'Cardio', nameLower: 'cardio', sort: 40 });
-    cardio = { id, name: 'Cardio', nameLower: 'cardio' };
-  }
-  for (const a of fresh) {
-    const key = a.exercise.toLowerCase();
-    if (!exByName.has(key)) {
-      const rec = { name: a.exercise, nameLower: key, categoryId: cardio.id, type: 'distance_time' };
-      rec.id = await db.put('exercises', rec);
-      exByName.set(key, rec);
-    }
-  }
-  await db.bulkPut('sets', fresh.map(a => ({
-    exerciseId: exByName.get(a.exercise.toLowerCase()).id,
-    date: a.date,
-    weight: 0,
-    reps: 0,
-    distance: a.distanceM || 0,
-    time: a.timeSec || 0,
-    comment: a.comment || '',
-    stravaId: a.id,
-    seq: nextSeq(),
-  })));
-  toast(`${fresh.length} Strava ${fresh.length === 1 ? 'activity' : 'activities'} synced`);
-  rerender();
-}
-
-// ---------------------------------------------------------------------------
 // Settings screen
 
 async function renderSettings() {
-  const allSets = await db.getAll('sets');
-  const setCount = allSets.length;
-  const stravaCount = allSets.filter(s => s.stravaId).length;
+  const setCount = (await db.getAll('sets')).length;
   let persisted = false;
   try { persisted = await navigator.storage?.persisted?.() || false; } catch { /* n/a */ }
 
@@ -1386,8 +1330,6 @@ async function renderSettings() {
       <button class="btn btn-ghost btn-block" id="import-csv-btn">Import FitNotes CSV export</button>
       <button class="btn btn-ghost btn-block" id="restore-json-btn">Restore JSON backup</button>
       <p class="setting-note">In FitNotes: Settings → Data Management → Export Workout Data (CSV), then open the file here. Re-importing is safe — duplicates are skipped.</p>
-      <button class="btn btn-ghost btn-block" id="strava-check">Check Strava sync now</button>
-      <p class="setting-note">Strava: ${stravaCount ? `${stravaCount} activities synced.` : 'not connected.'} Runs and rides sync automatically every few hours once Strava is connected — see the README in the repo for the one-time setup.</p>
 
       <div class="settings-section">Data</div>
       <p class="setting-note">${setCount} sets stored on this device.
@@ -1412,11 +1354,6 @@ async function renderSettings() {
   root.querySelector('#set-inc').onchange = e => setSetting('weightIncrement', parseFloat(e.target.value) || 5);
   root.querySelector('#set-rest').onchange = e => setSetting('restSeconds', parseInt(e.target.value, 10) || 0);
 
-  root.querySelector('#strava-check').onclick = async () => {
-    toast('Checking for Strava activities…');
-    await syncStravaData();
-    rerender();
-  };
   root.querySelector('#backup-download').onclick = doBackupDownload;
   root.querySelector('#backup-share')?.addEventListener('click', doBackupShare);
   root.querySelector('#export-csv').onclick = doExportCSV;
@@ -1486,7 +1423,6 @@ async function main() {
   state.stack = [renderHome];
   await renderHome();
   registerSW();
-  syncStravaData();
 }
 
 main().catch(err => {
