@@ -381,6 +381,45 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .field-label { display: block; font-size: 13px; font-weight: 500; color: var(--ink-2); margin-bottom: 12px; }
 .field-label .text-input { margin-top: 4px; margin-bottom: 0; }
 
+/* ---- calendar ---- */
+.cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.cal-head .icon-btn { color: var(--ink-2); }
+.cal-title { font-weight: 500; font-size: 16px; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.cal-cell {
+  min-height: 44px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; border-radius: 8px; padding: 0;
+}
+.cal-wd { min-height: 22px; color: var(--muted); font-size: 11px; font-weight: 600; }
+.cal-day:active { background: var(--hairline); }
+.cal-num { font-size: 14px; line-height: 1; }
+.cal-today .cal-num { color: var(--accent); font-weight: 700; }
+.cal-selected { background: var(--accent); }
+.cal-selected .cal-num { color: var(--accent-ink); font-weight: 600; }
+.cal-selected .cal-dot { background: var(--accent-ink); }
+.cal-dot { background: var(--accent); border-radius: 50%; flex: none; }
+.cal-dot-space { width: 8px; height: 8px; }
+.cal-dot-1 { width: 4px; height: 4px; margin: 2px; }
+.cal-dot-2 { width: 6px; height: 6px; margin: 1px; }
+.cal-dot-3 { width: 8px; height: 8px; }
+.cal-legend {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  color: var(--muted); font-size: 12px; margin-top: 12px;
+}
+.cal-legend .cal-dot-1, .cal-legend .cal-dot-2 { margin: 0; }
+.cal-legend .cal-dot + * { margin-right: 6px; }
+
+/* ---- exercise usage stats ---- */
+.row-stats {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 12px; color: var(--muted); margin-top: 1px;
+}
+.rec-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.rec-fresh { background: #0ca30c; }
+.rec-mid { background: #fab219; }
+.rec-old { background: #9e9e9e; }
+
 /* ---- toast ---- */
 #toast-root {
   position: fixed; left: 0; right: 0;

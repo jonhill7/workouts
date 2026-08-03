@@ -3,7 +3,7 @@ import { KG_PER_LB, parseFitNotesCSV, setKey, inferType, timeToString, parseTime
 import * as exporter from './exporter.js';
 import { renderLineChart } from './charts.js';
 
-export const APP_VERSION = '1.1.2';
+export const APP_VERSION = '1.2.0';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
@@ -376,8 +376,7 @@ async function renderHome() {
         </div>`}
       <div class="fab-space"></div>
     </main>
-    <button class="fab" id="fab-add" aria-label="Add exercise">＋</button>
-    <input type="date" id="date-input" class="visually-hidden" value="${state.date}">`;
+    <button class="fab" id="fab-add" aria-label="Add exercise">＋</button>`;
 
   const root = $app();
   wireBackupBanner(root);
@@ -385,11 +384,8 @@ async function renderHome() {
     state.date = addDays(state.date, parseInt(b.dataset.day, 10));
     rerender();
   });
-  const dateInput = root.querySelector('#date-input');
-  const openPicker = () => (dateInput.showPicker ? dateInput.showPicker() : dateInput.click());
-  root.querySelector('#date-btn').onclick = openPicker;
-  root.querySelector('#cal-btn').onclick = openPicker;
-  dateInput.onchange = () => { if (dateInput.value) { state.date = dateInput.value; rerender(); } };
+  root.querySelector('#date-btn').onclick = openCalendar;
+  root.querySelector('#cal-btn').onclick = openCalendar;
   root.querySelector('#today-btn')?.addEventListener('click', () => { state.date = todayStr(); rerender(); });
   root.querySelector('#settings-btn').onclick = () => pushView(renderSettings);
   root.querySelector('#fab-add').onclick = () => pushView(renderExercisePicker);
@@ -400,12 +396,119 @@ async function renderHome() {
 }
 
 // ---------------------------------------------------------------------------
+// Calendar — workout days get a dot, sized by how many sets were logged.
+
+async function openCalendar() {
+  const sets = await db.getAll('sets');
+  const counts = new Map();
+  for (const s of sets) counts.set(s.date, (counts.get(s.date) || 0) + 1);
+
+  let view = state.date.slice(0, 7); // 'YYYY-MM'
+  const { el, close } = openModal('<div id="cal-root"></div>');
+  const root = el.querySelector('#cal-root');
+  const p = n => String(n).padStart(2, '0');
+
+  const draw = () => {
+    const [y, m] = view.split('-').map(Number);
+    const startDow = new Date(y, m - 1, 1).getDay();
+    const daysInMonth = new Date(y, m, 0).getDate();
+    let cells = '';
+    for (let i = 0; i < startDow; i++) cells += '<span class="cal-cell"></span>';
+    for (let d = 1; d <= daysInMonth; d++) {
+      const ds = `${y}-${p(m)}-${p(d)}`;
+      const n = counts.get(ds) || 0;
+      const tier = n === 0 ? 0 : n < 10 ? 1 : n < 20 ? 2 : 3;
+      cells += `
+        <button class="cal-cell cal-day${ds === state.date ? ' cal-selected' : ''}${ds === todayStr() ? ' cal-today' : ''}"
+          data-date="${ds}" ${n ? `title="${n} sets"` : ''}>
+          <span class="cal-num">${d}</span>
+          ${tier ? `<span class="cal-dot cal-dot-${tier}"></span>` : '<span class="cal-dot-space"></span>'}
+        </button>`;
+    }
+    root.innerHTML = `
+      <div class="cal-head">
+        <button class="icon-btn" data-cal="-1" aria-label="Previous month">‹</button>
+        <span class="cal-title">${MONTHS[m - 1]} ${y}</span>
+        <button class="icon-btn" data-cal="1" aria-label="Next month">›</button>
+      </div>
+      <div class="cal-grid">
+        ${['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(w => `<span class="cal-cell cal-wd">${w}</span>`).join('')}
+        ${cells}
+      </div>
+      <div class="cal-legend">
+        <span class="cal-dot cal-dot-1"></span> 1–9 sets
+        <span class="cal-dot cal-dot-2"></span> 10–19
+        <span class="cal-dot cal-dot-3"></span> 20+
+      </div>`;
+    root.querySelectorAll('[data-cal]').forEach(b => b.onclick = () => {
+      let ny = y, nm = m + parseInt(b.dataset.cal, 10);
+      if (nm === 0) { nm = 12; ny--; }
+      if (nm === 13) { nm = 1; ny++; }
+      view = `${ny}-${p(nm)}`;
+      draw();
+    });
+    root.querySelectorAll('.cal-day').forEach(b => b.onclick = () => {
+      state.date = b.dataset.date;
+      close();
+      rerender();
+    });
+  };
+  draw();
+}
+
+// ---------------------------------------------------------------------------
 // Exercise picker
+
+// Per-exercise usage: distinct workout days + most recent date.
+async function exerciseStatsMap() {
+  const sets = await db.getAll('sets');
+  const map = new Map();
+  for (const s of sets) {
+    let st = map.get(s.exerciseId);
+    if (!st) map.set(s.exerciseId, st = { days: new Set(), last: '' });
+    st.days.add(s.date);
+    if (s.date > st.last) st.last = s.date;
+  }
+  return map;
+}
+
+function recencyInfo(last) {
+  const d = Math.max(0, Math.round((Date.parse(todayStr()) - Date.parse(last)) / 86_400_000));
+  const label =
+    d === 0 ? 'today' :
+    d === 1 ? 'yesterday' :
+    d < 14 ? `${d} days ago` :
+    d < 60 ? `${Math.round(d / 7)} weeks ago` :
+    d < 700 ? `${Math.round(d / 30)} months ago` :
+    `${(d / 365).toFixed(1)} years ago`;
+  const cls = d <= 7 ? 'rec-fresh' : d <= 28 ? 'rec-mid' : 'rec-old';
+  return { label, cls };
+}
+
+function exerciseRowHTML(e, st, hidden = false) {
+  let stats;
+  if (st) {
+    const r = recencyInfo(st.last);
+    stats = `<span class="rec-dot ${r.cls}"></span>${st.days.size} workout${st.days.size === 1 ? '' : 's'} · ${r.label}`;
+  } else {
+    stats = '<span class="row-stats-empty">No workouts yet</span>';
+  }
+  return `
+    <div class="list-row picker-row" data-ex="${e.id}" data-name="${esc(e.name.toLowerCase())}"${hidden ? ' style="display:none"' : ''}>
+      <div class="row-label">
+        <div>${esc(e.name)}</div>
+        <div class="row-stats">${stats}</div>
+      </div>
+      <button class="icon-btn" data-edit="${e.id}" aria-label="Edit ${esc(e.name)}">⋮</button>
+    </div>`;
+}
 
 // FitNotes flow: + → category list → exercise list. Searching from the
 // category screen searches all exercises directly.
 async function renderExercisePicker() {
-  const [categories, exercises] = await Promise.all([allCategories(), allExercises()]);
+  const [categories, exercises, stats] = await Promise.all([
+    allCategories(), allExercises(), exerciseStatsMap(),
+  ]);
   const counts = new Map();
   for (const e of exercises) counts.set(e.categoryId, (counts.get(e.categoryId) || 0) + 1);
 
@@ -416,11 +519,7 @@ async function renderExercisePicker() {
       <span class="row-chevron">›</span>
     </div>`).join('');
 
-  const exRows = exercises.map(e => `
-    <div class="list-row picker-row" data-ex="${e.id}" data-name="${esc(e.name.toLowerCase())}" style="display:none">
-      <span class="row-label">${esc(e.name)}</span>
-      <button class="icon-btn" data-edit="${e.id}" aria-label="Edit ${esc(e.name)}">⋮</button>
-    </div>`).join('');
+  const exRows = exercises.map(e => exerciseRowHTML(e, stats.get(e.id), true)).join('');
 
   $app().innerHTML = `
     ${header({
@@ -457,8 +556,10 @@ async function renderExercisePicker() {
 async function renderCategoryExercises(categoryId) {
   const cat = await db.get('categories', categoryId);
   if (!cat) { back(); return; }
-  const exercises = (await db.getAllByIndex('exercises', 'categoryId', categoryId))
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const [exercises, stats] = await Promise.all([
+    db.getAllByIndex('exercises', 'categoryId', categoryId), exerciseStatsMap(),
+  ]);
+  exercises.sort((a, b) => a.name.localeCompare(b.name));
 
   $app().innerHTML = `
     ${header({
@@ -466,11 +567,8 @@ async function renderCategoryExercises(categoryId) {
       right: `<button class="icon-btn" id="new-ex" title="New exercise">＋</button>`,
     })}
     <main class="content">
-      ${exercises.map(e => `
-        <div class="list-row picker-row" data-ex="${e.id}">
-          <span class="row-label">${esc(e.name)}</span>
-          <button class="icon-btn" data-edit="${e.id}" aria-label="Edit ${esc(e.name)}">⋮</button>
-        </div>`).join('') || '<div class="empty-state"><p>No exercises in this category.</p></div>'}
+      ${exercises.map(e => exerciseRowHTML(e, stats.get(e.id))).join('') ||
+        '<div class="empty-state"><p>No exercises in this category.</p></div>'}
     </main>`;
 
   const root = $app();
