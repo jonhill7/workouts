@@ -2,7 +2,7 @@
 // Bump VERSION on every release — deploys are picked up on next visit
 // (an "Update ready" toast offers an immediate reload).
 
-const VERSION = 'v1.2.0';
+const VERSION = 'v1.3.0';
 const CACHE = `workout-log-${VERSION}`;
 
 const ASSETS = [
@@ -39,6 +39,9 @@ self.addEventListener('message', e => {
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
+
+  // Strava sync data must always be fresh — network only, never cached.
+  if (url.pathname.endsWith('/data/strava.json')) return;
 
   // Navigations: network-first so new deploys land, cache fallback offline.
   if (e.request.mode === 'navigate') {
