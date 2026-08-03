@@ -4,12 +4,27 @@ import { loadSqlJs, looksLikeSQLite, parseFitNotesDB } from './fitnotes-db.js';
 import * as exporter from './exporter.js';
 import { renderLineChart } from './charts.js';
 
-export const APP_VERSION = '1.4.1';
+export const APP_VERSION = '1.4.2';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
 
 const $app = () => document.getElementById('app');
+
+// Monochrome Material-style icons drawn in currentColor, so they inherit the
+// app bar's white (or a list's gray) instead of rendering as colorful emoji.
+const ICONS = {
+  back: 'M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z',
+  calendar: 'M20 3h-1V1h-2v2H7V1H5v2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 18H4V8h16v13z',
+  routines: 'M19 5v14H5V5h14m0-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-8 4h6v2h-6V7zm0 4h6v2h-6v-2zm0 4h6v2h-6v-2zM7 7h2v2H7V7zm0 4h2v2H7v-2zm0 4h2v2H7v-2z',
+  settings: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z',
+  today: 'M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8h-1.5z',
+  pencil: 'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z',
+  plus: 'M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z',
+};
+
+const icon = name =>
+  `<svg class="svg-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="${ICONS[name]}"/></svg>`;
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c =>
@@ -246,7 +261,7 @@ function header({ title, showBack = false, right = '' }) {
   return `
     <header class="topbar">
       ${showBack
-        ? '<button class="icon-btn" data-nav="back" aria-label="Back">←</button>'
+        ? `<button class="icon-btn" data-nav="back" aria-label="Back">${icon('back')}</button>`
         : '<span class="topbar-spacer"></span>'}
       <div class="topbar-title">${title}</div>
       <div class="topbar-right">${right}</div>
@@ -403,10 +418,10 @@ async function renderHome() {
   $app().innerHTML = `
     ${header({
       title: 'Workout Log',
-      right: `${state.date !== todayStr() ? '<button class="icon-btn" id="today-btn" title="Go to today">↺</button>' : ''}
-              <button class="icon-btn" id="routines-btn" aria-label="Routines">📋</button>
-              <button class="icon-btn" id="cal-btn" aria-label="Pick date">📅</button>
-              <button class="icon-btn" id="settings-btn" aria-label="Settings">⚙</button>`,
+      right: `${state.date !== todayStr() ? `<button class="icon-btn" id="today-btn" title="Go to today">${icon('today')}</button>` : ''}
+              <button class="icon-btn" id="routines-btn" aria-label="Routines">${icon('routines')}</button>
+              <button class="icon-btn" id="cal-btn" aria-label="Pick date">${icon('calendar')}</button>
+              <button class="icon-btn" id="settings-btn" aria-label="Settings">${icon('settings')}</button>`,
     })}
     <div class="datebar">
       <button class="arrow" data-day="-1" aria-label="Previous day">◀</button>
@@ -601,8 +616,8 @@ async function renderExercisePicker() {
   $app().innerHTML = `
     ${header({
       title: 'Select Category', showBack: true,
-      right: `<button class="icon-btn" id="new-ex" title="New exercise">＋</button>
-              <button class="icon-btn" id="cat-btn" title="Manage categories">✎</button>`,
+      right: `<button class="icon-btn" id="new-ex" title="New exercise">${icon('plus')}</button>
+              <button class="icon-btn" id="cat-btn" title="Manage categories">${icon('pencil')}</button>`,
     })}
     <main class="content">
       <input type="search" id="ex-search" class="search-input" placeholder="Search all exercises…" autocomplete="off">
@@ -641,7 +656,7 @@ async function renderCategoryExercises(categoryId) {
   $app().innerHTML = `
     ${header({
       title: esc(cat.name), showBack: true,
-      right: `<button class="icon-btn" id="new-ex" title="New exercise">＋</button>`,
+      right: `<button class="icon-btn" id="new-ex" title="New exercise">${icon('plus')}</button>`,
     })}
     <main class="content">
       ${sortChipsHTML()}
@@ -875,8 +890,8 @@ async function renderTrackTab(body, ex) {
 
   body.innerHTML = `
     <button class="ex-note" id="ex-note">${ex.notes
-      ? `📝 <span class="ex-note-text">${esc(ex.notes)}</span>`
-      : '<span class="ex-note-empty">📝 Add note</span>'}</button>
+      ? `${icon('pencil')}<span class="ex-note-text">${esc(ex.notes)}</span>`
+      : `<span class="ex-note-empty">${icon('pencil')}Add note</span>`}</button>
     <div class="track-wrap">
     <div class="track-date">${esc(fmtDateLong(state.date))}</div>
     ${isCardio ? `
@@ -1324,7 +1339,7 @@ async function renderRoutine(routineId) {
   $app().innerHTML = `
     ${header({
       title: esc(routine.name), showBack: true,
-      right: '<button class="icon-btn" id="rt-add" title="Add exercise">＋</button>',
+      right: `<button class="icon-btn" id="rt-add" title="Add exercise">${icon('plus')}</button>`,
     })}
     <main class="content">
       <div class="setting-note">${esc(fmtDateHeading(state.date))} — tap an exercise to log it. ✓ = logged today.</div>
