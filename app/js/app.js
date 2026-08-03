@@ -3,7 +3,7 @@ import { KG_PER_LB, parseFitNotesCSV, setKey, inferType, timeToString, parseTime
 import * as exporter from './exporter.js';
 import { renderLineChart } from './charts.js';
 
-export const APP_VERSION = '1.0.0';
+export const APP_VERSION = '1.1.0';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
@@ -71,7 +71,7 @@ function fmtDateHeading(dateStr) {
   if (dateStr === addDays(todayStr(), -1)) return 'Yesterday';
   if (dateStr === addDays(todayStr(), 1)) return 'Tomorrow';
   const d = new Date(dateStr + 'T12:00:00');
-  return `${WEEKDAYS[d.getDay()].slice(0, 3)}, ${MONTHS[d.getMonth()].slice(0, 3)} ${d.getDate()}`;
+  return `${WEEKDAYS[d.getDay()]}, ${MONTHS[d.getMonth()].slice(0, 3)} ${d.getDate()}`;
 }
 
 function fmtDateLong(dateStr) {
@@ -119,14 +119,26 @@ function distUnitLabel() { return isMetric() ? 'km' : 'mi'; }
 function mToDisplayDist(m) { return isMetric() ? m / 1000 : m / 1609.344; }
 function displayDistToM(v) { return isMetric() ? v * 1000 : v * 1609.344; }
 
-function describeSet(s, type) {
+// FitNotes shows sets as two columns: "185 lbs | 8 reps" (or distance | time).
+function describeCols(s, type) {
   if (type === 'distance_time') {
-    const parts = [];
-    if (s.distance > 0) parts.push(`${fmtNum(mToDisplayDist(s.distance))} ${distUnitLabel()}`);
-    if (s.time > 0) parts.push(timeToString(s.time));
-    return parts.join(' · ') || '—';
+    return [
+      s.distance > 0 ? `${fmtNum(mToDisplayDist(s.distance))} ${distUnitLabel()}` : '—',
+      s.time > 0 ? timeToString(s.time) : '—',
+    ];
   }
-  return `${fmtWeight(s.weight)} ${getUnit()} × ${s.reps}`;
+  return [`${fmtWeight(s.weight)} ${getUnit()}`, `${s.reps} reps`];
+}
+
+function setRowHTML(s, type, i, extra = '') {
+  const [a, b] = describeCols(s, type);
+  return `
+    <div class="set-row ${extra}" ${extra ? `data-set="${s.id}"` : ''}>
+      <span class="set-num">${i + 1}</span>
+      <span class="set-w">${esc(a)}</span>
+      <span class="set-r">${esc(b)}</span>
+      ${s.comment ? '<span class="set-comment-dot" title="has comment">✎</span>' : '<span></span>'}
+    </div>`;
 }
 
 function est1RM(weightKg, reps) {
@@ -335,51 +347,36 @@ async function renderHome() {
 
   const groupsHtml = groups.map(g => {
     if (!g.exercise) return '';
-    const cat = catById.get(g.exercise.categoryId);
-    const rows = g.sets.map((s, i) => `
-      <div class="set-row">
-        <span class="set-num">${i + 1}</span>
-        <span class="set-desc">${esc(describeSet(s, g.exercise.type))}</span>
-        ${s.comment ? '<span class="set-comment-dot" title="has comment">✎</span>' : ''}
-      </div>`).join('');
+    const rows = g.sets.map((s, i) => setRowHTML(s, g.exercise.type, i)).join('');
     return `
-      <div class="card exercise-group" data-ex="${g.exercise.id}">
-        <div class="group-head">
-          <span class="group-name">${esc(g.exercise.name)}</span>
-          <span class="group-cat">${esc(cat ? cat.name : '')}</span>
-        </div>
+      <div class="exercise-group" data-ex="${g.exercise.id}">
+        <div class="wgroup-name">${esc(g.exercise.name)}</div>
         ${rows}
       </div>`;
   }).join('');
 
-  const totalSets = sets.length;
-  const volume = sets.reduce((a, s) => a + s.weight * s.reps, 0);
-  const summary = totalSets
-    ? `${groups.length} exercise${groups.length === 1 ? '' : 's'} · ${totalSets} set${totalSets === 1 ? '' : 's'}` +
-      (volume > 0 ? ` · ${fmtNum(kgToDisplay(volume), 0)} ${getUnit()} volume` : '')
-    : '';
-
   $app().innerHTML = `
     ${header({
-      title: `
-        <button class="icon-btn" data-day="-1" aria-label="Previous day">‹</button>
-        <button class="date-btn" id="date-btn">${esc(fmtDateHeading(state.date))}</button>
-        <button class="icon-btn" data-day="1" aria-label="Next day">›</button>`,
-      right: `${state.date !== todayStr() ? '<button class="icon-btn" id="today-btn" title="Jump to today">◎</button>' : ''}
+      title: 'Workout Log',
+      right: `${state.date !== todayStr() ? '<button class="icon-btn" id="today-btn" title="Go to today">↺</button>' : ''}
+              <button class="icon-btn" id="cal-btn" aria-label="Pick date">📅</button>
               <button class="icon-btn" id="settings-btn" aria-label="Settings">⚙</button>`,
     })}
+    <div class="datebar">
+      <button class="arrow" data-day="-1" aria-label="Previous day">◀</button>
+      <button class="date-btn" id="date-btn">${esc(fmtDateHeading(state.date))}</button>
+      <button class="arrow" data-day="1" aria-label="Next day">▶</button>
+    </div>
     <main class="content">
       ${backupBannerHTML()}
-      ${summary ? `<div class="day-summary">${esc(summary)}</div>` : ''}
       ${groupsHtml || `
         <div class="empty-state">
-          <div class="empty-icon">🏋️</div>
-          <p>No workout logged for this day.</p>
-          <p class="empty-sub">Tap + to add an exercise.</p>
+          <p>Workout log is empty.</p>
+          <p class="empty-sub">Press the + button to add an exercise.</p>
         </div>`}
       <div class="fab-space"></div>
     </main>
-    <button class="fab" id="fab-add" aria-label="Add exercise">+</button>
+    <button class="fab" id="fab-add" aria-label="Add exercise">＋</button>
     <input type="date" id="date-input" class="visually-hidden" value="${state.date}">`;
 
   const root = $app();
@@ -389,7 +386,9 @@ async function renderHome() {
     rerender();
   });
   const dateInput = root.querySelector('#date-input');
-  root.querySelector('#date-btn').onclick = () => (dateInput.showPicker ? dateInput.showPicker() : dateInput.click());
+  const openPicker = () => (dateInput.showPicker ? dateInput.showPicker() : dateInput.click());
+  root.querySelector('#date-btn').onclick = openPicker;
+  root.querySelector('#cal-btn').onclick = openPicker;
   dateInput.onchange = () => { if (dateInput.value) { state.date = dateInput.value; rerender(); } };
   root.querySelector('#today-btn')?.addEventListener('click', () => { state.date = todayStr(); rerender(); });
   root.querySelector('#settings-btn').onclick = () => pushView(renderSettings);
@@ -403,63 +402,100 @@ async function renderHome() {
 // ---------------------------------------------------------------------------
 // Exercise picker
 
+// FitNotes flow: + → category list → exercise list. Searching from the
+// category screen searches all exercises directly.
 async function renderExercisePicker() {
   const [categories, exercises] = await Promise.all([allCategories(), allExercises()]);
-  const byCat = new Map(categories.map(c => [c.id, []]));
-  const uncat = [];
-  for (const e of exercises) (byCat.get(e.categoryId) || uncat).push(e);
+  const counts = new Map();
+  for (const e of exercises) counts.set(e.categoryId, (counts.get(e.categoryId) || 0) + 1);
 
-  const sections = categories
-    .filter(c => (byCat.get(c.id) || []).length > 0)
-    .map(c => `
-      <div class="picker-section" data-cat="${c.id}">
-        <div class="picker-cat">${esc(c.name)}</div>
-        ${(byCat.get(c.id) || []).map(e => `
-          <div class="picker-row" data-ex="${e.id}" data-name="${esc(e.name.toLowerCase())}">
-            <span>${esc(e.name)}</span>
-            <button class="icon-btn row-menu" data-edit="${e.id}" aria-label="Edit ${esc(e.name)}">⋮</button>
-          </div>`).join('')}
-      </div>`).join('');
+  const catRows = categories.map(c => `
+    <div class="list-row" data-cat="${c.id}">
+      <span class="row-label">${esc(c.name)}</span>
+      <span class="row-sub">${counts.get(c.id) || 0}</span>
+      <span class="row-chevron">›</span>
+    </div>`).join('');
+
+  const exRows = exercises.map(e => `
+    <div class="list-row picker-row" data-ex="${e.id}" data-name="${esc(e.name.toLowerCase())}" style="display:none">
+      <span class="row-label">${esc(e.name)}</span>
+      <button class="icon-btn" data-edit="${e.id}" aria-label="Edit ${esc(e.name)}">⋮</button>
+    </div>`).join('');
 
   $app().innerHTML = `
-    ${header({ title: 'Select Exercise', showBack: true, right: '<button class="icon-btn" id="cat-btn" title="Manage categories">🗂</button>' })}
+    ${header({
+      title: 'Select Category', showBack: true,
+      right: `<button class="icon-btn" id="new-ex" title="New exercise">＋</button>
+              <button class="icon-btn" id="cat-btn" title="Manage categories">✎</button>`,
+    })}
     <main class="content">
-      <input type="search" id="ex-search" class="search-input" placeholder="Search exercises…" autocomplete="off">
-      <button class="btn btn-ghost btn-block" id="new-ex">＋ New exercise</button>
-      <div id="picker-list">${sections}</div>
+      <input type="search" id="ex-search" class="search-input" placeholder="Search all exercises…" autocomplete="off">
+      <div id="cat-list">${catRows}</div>
+      <div id="search-list">${exRows}</div>
     </main>`;
 
   const root = $app();
   wireHeader(root);
   root.querySelector('#cat-btn').onclick = () => pushView(renderCategories);
   root.querySelector('#new-ex').onclick = () => exerciseEditor(null);
+  root.querySelectorAll('[data-cat]').forEach(row => row.onclick = () => {
+    const id = parseInt(row.dataset.cat, 10);
+    pushView(() => renderCategoryExercises(id));
+  });
+  wireExerciseRows(root);
+  const search = root.querySelector('#ex-search');
+  const catList = root.querySelector('#cat-list');
+  search.oninput = () => {
+    const q = search.value.trim().toLowerCase();
+    catList.style.display = q ? 'none' : '';
+    root.querySelectorAll('.picker-row').forEach(row => {
+      row.style.display = q && row.dataset.name.includes(q) ? '' : 'none';
+    });
+  };
+}
+
+async function renderCategoryExercises(categoryId) {
+  const cat = await db.get('categories', categoryId);
+  if (!cat) { back(); return; }
+  const exercises = (await db.getAllByIndex('exercises', 'categoryId', categoryId))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  $app().innerHTML = `
+    ${header({
+      title: esc(cat.name), showBack: true,
+      right: `<button class="icon-btn" id="new-ex" title="New exercise">＋</button>`,
+    })}
+    <main class="content">
+      ${exercises.map(e => `
+        <div class="list-row picker-row" data-ex="${e.id}">
+          <span class="row-label">${esc(e.name)}</span>
+          <button class="icon-btn" data-edit="${e.id}" aria-label="Edit ${esc(e.name)}">⋮</button>
+        </div>`).join('') || '<div class="empty-state"><p>No exercises in this category.</p></div>'}
+    </main>`;
+
+  const root = $app();
+  wireHeader(root);
+  root.querySelector('#new-ex').onclick = () => exerciseEditor(null, categoryId);
+  wireExerciseRows(root);
+}
+
+function wireExerciseRows(root) {
   root.querySelectorAll('.picker-row').forEach(row => {
     row.addEventListener('click', e => {
       if (e.target.closest('[data-edit]')) return;
       const id = parseInt(row.dataset.ex, 10);
-      // replace picker with the exercise screen so Back returns to the log
-      replaceView(() => renderExercise(id, 'track'));
+      pushView(() => renderExercise(id, 'track'));
     });
   });
   root.querySelectorAll('[data-edit]').forEach(btn => btn.onclick = async () => {
     const ex = await db.get('exercises', parseInt(btn.dataset.edit, 10));
     if (ex) exerciseEditor(ex);
   });
-  const search = root.querySelector('#ex-search');
-  search.oninput = () => {
-    const q = search.value.trim().toLowerCase();
-    root.querySelectorAll('.picker-row').forEach(row => {
-      row.style.display = !q || row.dataset.name.includes(q) ? '' : 'none';
-    });
-    root.querySelectorAll('.picker-section').forEach(sec => {
-      const any = [...sec.querySelectorAll('.picker-row')].some(r => r.style.display !== 'none');
-      sec.style.display = any ? '' : 'none';
-    });
-  };
 }
 
-async function exerciseEditor(existing) {
+async function exerciseEditor(existing, defaultCategoryId) {
   const categories = await allCategories();
+  const selectedCat = existing?.categoryId ?? defaultCategoryId;
   const { el, close } = openModal(`
     <h3>${existing ? 'Edit Exercise' : 'New Exercise'}</h3>
     <label class="field-label">Name
@@ -467,7 +503,7 @@ async function exerciseEditor(existing) {
     </label>
     <label class="field-label">Category
       <select id="exe-cat" class="text-input">
-        ${categories.map(c => `<option value="${c.id}" ${existing?.categoryId === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+        ${categories.map(c => `<option value="${c.id}" ${selectedCat === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
       </select>
     </label>
     <label class="field-label">Type
@@ -532,8 +568,8 @@ async function renderCategories() {
     <main class="content">
       <button class="btn btn-ghost btn-block" id="new-cat">＋ New category</button>
       ${categories.map(c => `
-        <div class="picker-row" data-cat="${c.id}">
-          <span>${esc(c.name)} <span class="row-sub">${counts.get(c.id) || 0} exercises</span></span>
+        <div class="list-row" data-catrow="${c.id}">
+          <span class="row-label">${esc(c.name)} <span class="row-sub">${counts.get(c.id) || 0} exercises</span></span>
           <button class="icon-btn" data-editcat="${c.id}">⋮</button>
         </div>`).join('')}
     </main>`;
@@ -643,6 +679,7 @@ async function renderTrackTab(body, ex) {
   const inc = S.weightIncrement || (isMetric() ? 2.5 : 5);
 
   body.innerHTML = `
+    <div class="track-wrap">
     <div class="track-date">${esc(fmtDateLong(state.date))}</div>
     ${isCardio ? `
       <div class="field-block">
@@ -681,18 +718,17 @@ async function renderTrackTab(body, ex) {
     <div class="track-actions">
       ${selectedId
         ? `<button class="btn btn-primary" id="btn-update">Update</button>
-           <button class="btn btn-danger" id="btn-delete">Delete</button>
-           <button class="btn btn-ghost" id="btn-deselect">Clear</button>`
-        : `<button class="btn btn-primary btn-save" id="btn-save">Save Set</button>
-           <button class="btn btn-ghost" id="btn-timer">⏱ ${restTimer.running ? restTimer.label() : 'Rest ' + timeToString(S.restSeconds)}</button>`}
+           <button class="btn btn-danger" id="btn-delete">Delete</button>`
+        : `<button class="btn btn-primary" id="btn-save">Save</button>
+           <button class="btn btn-gray" id="btn-clear">Clear</button>`}
+    </div>
+    <div class="timer-row">
+      <button class="timer-btn" id="btn-timer">${restTimer.running ? restTimer.label() : '⏱ Rest timer ' + timeToString(S.restSeconds)}</button>
+    </div>
     </div>
     <div class="set-list">
-      ${daySets.map((s, i) => `
-        <div class="set-row set-row-tappable ${s.id === selectedId ? 'set-row-selected' : ''}" data-set="${s.id}">
-          <span class="set-num">${i + 1}</span>
-          <span class="set-desc">${esc(describeSet(s, ex.type))}</span>
-          ${s.comment ? '<span class="set-comment-dot">✎</span>' : ''}
-        </div>`).join('')}
+      ${daySets.map((s, i) =>
+        setRowHTML(s, ex.type, i, 'set-row-tappable' + (s.id === selectedId ? ' set-row-selected' : ''))).join('')}
     </div>`;
 
   const val = id => body.querySelector(id)?.value ?? '';
@@ -765,8 +801,8 @@ async function renderTrackTab(body, ex) {
     delete trackDraft[ex.id];
     rerender();
   });
-  body.querySelector('#btn-deselect')?.addEventListener('click', () => {
-    delete trackDraft[ex.id];
+  body.querySelector('#btn-clear')?.addEventListener('click', () => {
+    trackDraft[ex.id] = { selectedId: null, weight: '', reps: '', dist: '', time: '', comment: '' };
     rerender();
   });
   body.querySelectorAll('[data-set]').forEach(row => row.onclick = () => {
@@ -799,14 +835,19 @@ async function renderHistoryTab(body, ex) {
     const chunk = dates.slice(shown, shown + PAGE);
     shown += chunk.length;
     list.insertAdjacentHTML('beforeend', chunk.map(date => `
-      <div class="card history-day" data-date="${date}">
-        <div class="group-head"><span class="group-name">${esc(fmtDateLong(date))}</span></div>
-        ${byDate.get(date).map((s, i) => `
+      <div class="history-day" data-date="${date}">
+        <div class="history-date">${esc(fmtDateLong(date))}</div>
+        ${byDate.get(date).map((s, i) => {
+          const [a, b] = describeCols(s, ex.type);
+          return `
           <div class="set-row">
             <span class="set-num">${i + 1}</span>
-            <span class="set-desc">${esc(describeSet(s, ex.type))}</span>
+            <span class="set-w">${esc(a)}</span>
+            <span class="set-r">${esc(b)}</span>
+            <span></span>
             ${s.comment ? `<span class="set-comment">${esc(s.comment)}</span>` : ''}
-          </div>`).join('')}
+          </div>`;
+        }).join('')}
       </div>`).join(''));
     if (shown >= dates.length) moreBtn.style.display = 'none';
     list.querySelectorAll('.history-day:not([data-wired])').forEach(dayEl => {
@@ -881,26 +922,31 @@ async function renderGraphTab(body, ex) {
     distance: distUnitLabel(), time: 'min', pace: `min/${distUnitLabel()}`,
   }[pref.metric] || '';
 
+  const rangeLabels = { '3m': '3 Months', '6m': '6 Months', '1y': '1 Year', all: 'All Time' };
   body.innerHTML = `
-    <div class="chip-row">
-      ${metrics.map(([id, label]) =>
-        `<button class="chip ${pref.metric === id ? 'chip-active' : ''}" data-metric="${id}">${label}</button>`).join('')}
-    </div>
-    <div class="chip-row">
-      ${GRAPH_RANGES.map(([id, label]) =>
-        `<button class="chip ${pref.range === id ? 'chip-active' : ''}" data-range="${id}">${label}</button>`).join('')}
-    </div>
-    <div class="chart-title">${esc(metrics.find(m => m[0] === pref.metric)?.[1] || '')}${unitFor ? ` (${esc(unitFor)})` : ''}</div>
-    <div id="chart"></div>`;
+    <div class="graph-wrap">
+      <div class="graph-controls">
+        <select id="g-metric" aria-label="Metric">
+          ${metrics.map(([id, label]) =>
+            `<option value="${id}" ${pref.metric === id ? 'selected' : ''}>${label}</option>`).join('')}
+        </select>
+        <select id="g-range" aria-label="Time range">
+          ${GRAPH_RANGES.map(([id]) =>
+            `<option value="${id}" ${pref.range === id ? 'selected' : ''}>${rangeLabels[id]}</option>`).join('')}
+        </select>
+      </div>
+      <div class="chart-title">${esc(metrics.find(m => m[0] === pref.metric)?.[1] || '')}${unitFor ? ` (${esc(unitFor)})` : ''}</div>
+      <div id="chart"></div>
+    </div>`;
 
-  body.querySelectorAll('[data-metric]').forEach(b => b.onclick = () => {
-    pref.metric = b.dataset.metric;
+  body.querySelector('#g-metric').onchange = e => {
+    pref.metric = e.target.value;
     renderGraphTab(body, ex);
-  });
-  body.querySelectorAll('[data-range]').forEach(b => b.onclick = () => {
-    pref.range = b.dataset.range;
+  };
+  body.querySelector('#g-range').onchange = e => {
+    pref.range = e.target.value;
     renderGraphTab(body, ex);
-  });
+  };
   renderLineChart(body.querySelector('#chart'), points, {
     formatValue: v => fmtNum(v, pref.metric === 'pace' ? 1 : v >= 1000 ? 0 : 1),
   });
@@ -929,11 +975,11 @@ async function renderRecordsTab(body, ex) {
         <div class="stat-value">${value}</div>
         <div class="stat-date">${esc(fmtDateLong(date))}</div>
       </div>`;
-    body.innerHTML = `<div class="stat-grid">
+    body.innerHTML = `<div class="records-wrap"><div class="stat-grid">
       ${maxDist ? tile('Longest distance', `${fmtNum(mToDisplayDist(maxDist.distance))} ${distUnitLabel()}`, maxDist.date) : ''}
       ${maxTime ? tile('Longest time', timeToString(maxTime.time), maxTime.date) : ''}
       ${bestPace ? tile('Best pace', `${fmtNum(bestPace.pace / 60, 1)} min/${distUnitLabel()}`, bestPace.date) : ''}
-    </div>`;
+    </div></div>`;
     return;
   }
 
@@ -964,6 +1010,7 @@ async function renderRecordsTab(body, ex) {
   }).join('');
 
   body.innerHTML = `
+    <div class="records-wrap">
     <div class="stat-grid">
       ${maxW ? tile('Max weight', `${fmtWeight(maxW.weight)} ${getUnit()} × ${maxW.reps}`, maxW.date) : ''}
       ${best1 ? tile('Best est. 1RM', `${fmtNum(kgToDisplay(best1.e), 1)} ${getUnit()}`, best1.date) : ''}
@@ -979,7 +1026,8 @@ async function renderRecordsTab(body, ex) {
       <table class="rec-table">
         <thead><tr><th>Reps</th><th>Best weight</th><th>Date</th></tr></thead>
         <tbody>${repRows}</tbody>
-      </table>` : ''}`;
+      </table>` : ''}
+    </div>`;
 }
 
 // ---------------------------------------------------------------------------
