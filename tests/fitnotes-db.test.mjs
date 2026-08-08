@@ -58,10 +58,13 @@ test('exercise notes are extracted', () => {
   assert.equal(parsed.exerciseNotes.size, 1);
 });
 
-test('routines come through with section-ordered exercises', () => {
+test('routines come through with section-ordered exercises and template set counts', () => {
   assert.equal(parsed.routines.length, 1);
   assert.equal(parsed.routines[0].name, 'Push Day');
-  assert.deepEqual(parsed.routines[0].exercises, ['Flat Barbell Bench Press', 'Cable Fly']);
+  assert.deepEqual(parsed.routines[0].exercises, [
+    { name: 'Flat Barbell Bench Press', sets: 4 }, // 4 template sets in the backup
+    { name: 'Cable Fly', sets: 0 },                // none -> importer default
+  ]);
 });
 
 test('all exercise definitions are listed with categories', () => {

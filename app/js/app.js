@@ -3,8 +3,12 @@ import { KG_PER_LB, parseFitNotesCSV, setKey, inferType, timeToString, parseTime
 import { loadSqlJs, looksLikeSQLite, parseFitNotesDB } from './fitnotes-db.js';
 import * as exporter from './exporter.js';
 import { renderLineChart } from './charts.js';
+import {
+  routineStats, routineItems, dayProgress, glowLevel,
+  MAX_GAP_DAYS, DEFAULT_SETS, PARTIAL_THRESHOLD,
+} from './streaks.js';
 
-export const APP_VERSION = '1.4.2';
+export const APP_VERSION = '1.6.0';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
@@ -21,6 +25,7 @@ const ICONS = {
   today: 'M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8h-1.5z',
   pencil: 'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z',
   plus: 'M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z',
+  flame: 'M13.5.67s.74 2.65.74 4.8c0 2.06-1.35 3.73-3.41 3.73-2.07 0-3.63-1.67-3.63-3.73l.03-.36C5.21 7.51 4 10.62 4 14c0 4.42 3.58 8 8 8s8-3.58 8-8C20 8.61 17.41 3.8 13.5.67zM11.71 19c-1.78 0-3.22-1.4-3.22-3.14 0-1.62 1.05-2.76 2.81-3.12 1.77-.36 3.6-1.21 4.62-2.58.39 1.29.59 2.65.59 4.04 0 2.65-2.15 4.8-4.8 4.8z',
 };
 
 const icon = name =>
@@ -683,8 +688,11 @@ function wireExerciseRows(root) {
         state.pickFor = null;
         const routine = await db.get('routines', routineId);
         if (routine) {
-          if (!routine.exerciseIds.includes(id)) {
-            routine.exerciseIds.push(id);
+          const items = routineItems(routine);
+          if (!items.some(it => it.exerciseId === id)) {
+            items.push({ exerciseId: id, sets: DEFAULT_SETS });
+            routine.items = items;
+            delete routine.exerciseIds;
             await db.put('routines', routine);
           }
           toast('Added to routine');
@@ -1265,19 +1273,45 @@ async function renderRecordsTab(body, ex) {
 // ---------------------------------------------------------------------------
 // Routines — ordered exercise lists; work down the list on gym day.
 
+// Glowing flame badge: the brighter (and hotter-colored) the glow, the longer
+// the current streak. Intensity keeps growing until GLOW_CAP completions.
+function streakBadgeHTML(streak) {
+  if (!streak) return '';
+  return `
+    <span class="streak-badge" style="--glow:${glowLevel(streak).toFixed(3)}"
+      title="${streak} completion${streak === 1 ? '' : 's'} in a row">
+      ${icon('flame')}<span class="streak-count">${streak}</span>
+    </span>`;
+}
+
 async function renderRoutines() {
-  const routines = await db.getAll('routines');
+  const [routines, sets] = await Promise.all([db.getAll('routines'), db.getAll('sets')]);
   routines.sort((a, b) => a.name.localeCompare(b.name));
+  const infoById = new Map(routines.map(r => {
+    const items = routineItems(r);
+    return [r.id, { items, stats: routineStats(items, sets, todayStr()) }];
+  }));
   $app().innerHTML = `
     ${header({ title: 'Routines', showBack: true })}
     <main class="content">
       <button class="btn btn-ghost btn-block" id="new-routine">＋ New routine</button>
-      ${routines.map(r => `
+      ${routines.map(r => {
+        const { items, stats: st } = infoById.get(r.id);
+        const totalSets = items.reduce((a, it) => a + Math.max(1, it.sets || 0), 0);
+        return `
         <div class="list-row" data-routine="${r.id}">
-          <span class="row-label">${esc(r.name)}<span class="row-sub">${r.exerciseIds.length} exercises</span></span>
+          <div class="row-label">
+            <div>${esc(r.name)}<span class="row-sub">${items.length} exercise${items.length === 1 ? '' : 's'} · ${totalSets} sets</span></div>
+            <div class="row-stats">${st.total
+              ? `${st.total} completion${st.total === 1 ? '' : 's'}${st.partial ? ` (${st.partial} partial)` : ''}${st.streak ? ` · streak ${st.streak}` : ''}`
+              : '<span class="row-stats-empty">Not completed yet</span>'}</div>
+          </div>
+          ${streakBadgeHTML(st.streak)}
           <button class="icon-btn" data-editroutine="${r.id}">⋮</button>
-        </div>`).join('') ||
+        </div>`;
+      }).join('') ||
         '<div class="empty-state"><p>No routines yet.</p><p class="empty-sub">Create one, or import your FitNotes backup — routines come with it.</p></div>'}
+      ${routines.length ? `<p class="setting-note">A day counts as a completion when you log all of a routine's target sets; ${Math.round(PARTIAL_THRESHOLD * 100)}% of them counts as a partial. Streaks survive gaps of up to ${MAX_GAP_DAYS} days.</p>` : ''}
     </main>`;
   const root = $app();
   wireHeader(root);
@@ -1309,7 +1343,7 @@ function routineEditor(existing) {
   el.querySelector('[data-act=save]').onclick = async () => {
     const name = el.querySelector('#rt-name').value.trim();
     if (!name) { toast('Name is required'); return; }
-    const rec = existing ? { ...existing, name } : { name, exerciseIds: [] };
+    const rec = existing ? { ...existing, name } : { name, items: [] };
     const id = await db.put('routines', rec);
     close();
     if (!existing) pushView(() => renderRoutine(id));
@@ -1331,10 +1365,18 @@ function routineEditor(existing) {
 async function renderRoutine(routineId) {
   const routine = await db.get('routines', routineId);
   if (!routine) { back(); return; }
+  // migrate legacy exerciseIds to items in memory; persisted on the next edit
+  const items = routineItems(routine);
+  routine.items = items;
+  delete routine.exerciseIds;
   const [exercises, daySets] = await Promise.all([allExercises(), setsForDate(state.date)]);
   const exById = new Map(exercises.map(e => [e.id, e]));
   const doneToday = new Map();
   for (const s of daySets) doneToday.set(s.exerciseId, (doneToday.get(s.exerciseId) || 0) + 1);
+
+  const { done, want } = dayProgress(items, daySets);
+  const frac = want ? done / want : 0;
+  const fillCls = frac >= 1 ? 'rt-fill-full' : frac >= PARTIAL_THRESHOLD ? 'rt-fill-part' : '';
 
   $app().innerHTML = `
     ${header({
@@ -1342,15 +1384,22 @@ async function renderRoutine(routineId) {
       right: `<button class="icon-btn" id="rt-add" title="Add exercise">${icon('plus')}</button>`,
     })}
     <main class="content">
-      <div class="setting-note">${esc(fmtDateHeading(state.date))} — tap an exercise to log it. ✓ = logged today.</div>
-      ${routine.exerciseIds.map((id, i) => {
-        const ex = exById.get(id);
+      <div class="setting-note">${esc(fmtDateHeading(state.date))} — tap an exercise to log it, or its ×N to change its target sets.</div>
+      ${items.length ? `
+        <div class="rt-progress">
+          <div class="rt-bar"><div class="rt-bar-fill ${fillCls}" style="width:${Math.min(100, Math.round(frac * 100))}%"></div></div>
+          <span class="rt-progress-label">${done}/${want} sets${frac >= 1 ? ' ✓' : frac >= PARTIAL_THRESHOLD ? ' · partial' : ''}</span>
+        </div>` : ''}
+      ${items.map((it, i) => {
+        const ex = exById.get(it.exerciseId);
         if (!ex) return '';
-        const n = doneToday.get(id) || 0;
+        const t = Math.max(1, it.sets || 0);
+        const n = doneToday.get(it.exerciseId) || 0;
         return `
-          <div class="list-row routine-row" data-ex="${id}">
-            <span class="rt-done ${n ? 'rt-done-yes' : ''}">${n ? '✓' : ''}</span>
-            <span class="row-label">${esc(ex.name)}${n ? `<span class="row-sub">${n} set${n === 1 ? '' : 's'}</span>` : ''}</span>
+          <div class="list-row routine-row" data-ex="${it.exerciseId}">
+            <span class="rt-done ${n >= t ? 'rt-done-yes' : n > 0 ? 'rt-done-part' : ''}">${n >= t ? '✓' : n > 0 ? '◐' : ''}</span>
+            <span class="row-label">${esc(ex.name)}<span class="row-sub">${n}/${t} sets</span></span>
+            <button class="icon-btn rt-sets" data-sets="${i}" aria-label="Target sets for ${esc(ex.name)}">×${t}</button>
             <button class="icon-btn rt-move" data-move="${i}:-1" aria-label="Move up">▲</button>
             <button class="icon-btn rt-move" data-move="${i}:1" aria-label="Move down">▼</button>
             <button class="icon-btn" data-remove="${i}" aria-label="Remove">✕</button>
@@ -1369,16 +1418,42 @@ async function renderRoutine(routineId) {
     const id = parseInt(row.dataset.ex, 10);
     pushView(() => renderExercise(id, 'track'));
   });
+  root.querySelectorAll('[data-sets]').forEach(b => b.onclick = () => {
+    const i = parseInt(b.dataset.sets, 10);
+    const ex = exById.get(items[i].exerciseId);
+    const { el, close } = openModal(`
+      <h3>Target sets — ${esc(ex?.name || '')}</h3>
+      <div class="stepper">
+        <button class="step-btn" data-d="-1">−</button>
+        <input type="number" inputmode="numeric" step="1" min="1" id="sets-n" value="${Math.max(1, items[i].sets || 0)}">
+        <button class="step-btn" data-d="1">＋</button>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" data-act="cancel">Cancel</button>
+        <button class="btn btn-primary" data-act="save">Save</button>
+      </div>`);
+    const input = el.querySelector('#sets-n');
+    el.querySelectorAll('[data-d]').forEach(s => s.onclick = () => {
+      input.value = Math.max(1, (parseInt(input.value, 10) || 1) + parseInt(s.dataset.d, 10));
+    });
+    el.querySelector('[data-act=cancel]').onclick = close;
+    el.querySelector('[data-act=save]').onclick = async () => {
+      items[i].sets = Math.max(1, parseInt(input.value, 10) || 1);
+      await db.put('routines', routine);
+      close();
+      rerender();
+    };
+  });
   root.querySelectorAll('[data-move]').forEach(b => b.onclick = async () => {
     const [i, d] = b.dataset.move.split(':').map(Number);
     const j = i + d;
-    if (j < 0 || j >= routine.exerciseIds.length) return;
-    [routine.exerciseIds[i], routine.exerciseIds[j]] = [routine.exerciseIds[j], routine.exerciseIds[i]];
+    if (j < 0 || j >= items.length) return;
+    [items[i], items[j]] = [items[j], items[i]];
     await db.put('routines', routine);
     rerender();
   });
   root.querySelectorAll('[data-remove]').forEach(b => b.onclick = async () => {
-    routine.exerciseIds.splice(parseInt(b.dataset.remove, 10), 1);
+    items.splice(parseInt(b.dataset.remove, 10), 1);
     await db.put('routines', routine);
     rerender();
   });
@@ -1559,8 +1634,9 @@ async function handleFitNotesDBImport(file) {
   const exByName = new Map((await db.getAll('exercises')).map(e => [e.nameLower, e]));
   for (const r of parsed.routines) {
     if (haveRoutines.has(r.name.toLowerCase())) continue;
-    const ids = [];
-    for (const name of r.exercises) {
+    const items = [];
+    for (const entry of r.exercises) {
+      const name = entry.name;
       const key = name.toLowerCase();
       let ex = exByName.get(key);
       if (!ex) {
@@ -1575,10 +1651,13 @@ async function handleFitNotesDBImport(file) {
         ex.id = await db.put('exercises', ex);
         exByName.set(key, ex);
       }
-      if (!ids.includes(ex.id)) ids.push(ex.id);
+      if (!items.some(it => it.exerciseId === ex.id)) {
+        // sets: 0 means the backup had no template sets for this exercise
+        items.push({ exerciseId: ex.id, sets: Math.max(1, entry.sets || DEFAULT_SETS) });
+      }
     }
-    if (ids.length) {
-      await db.put('routines', { name: r.name, exerciseIds: ids });
+    if (items.length) {
+      await db.put('routines', { name: r.name, items });
       routinesAdded++;
     }
   }
