@@ -1,7 +1,9 @@
 // Building export files (FitNotes-compatible CSV, JSON backup) and getting
 // them off the device (download / Android share sheet).
 
-import { KG_PER_LB, timeToString } from './importer.js';
+import {
+  KG_PER_LB, timeToString, LEVEL_TYPES, LEVEL_SOURCES, DEFAULT_LEVEL_SOURCE,
+} from './importer.js';
 
 function csvField(v) {
   const s = String(v ?? '');
@@ -24,16 +26,31 @@ export function buildCSV({ sets, exercises, categories, unit }) {
     const ex = exById.get(s.exerciseId);
     if (!ex) continue;
     const cat = catById.get(ex.categoryId);
-    const weight = unit === 'lbs' ? round2(s.weight / KG_PER_LB) : round2(s.weight);
+    let weight = unit === 'lbs' ? round2(s.weight / KG_PER_LB) : round2(s.weight);
+    let weightUnit = weight ? unit : '';
     const hasDist = s.distance > 0;
-    const dist = hasDist ? (unit === 'lbs' ? round2(s.distance / 1609.344) : round2(s.distance / 1000)) : '';
-    const distUnit = hasDist ? (unit === 'lbs' ? 'miles' : 'km') : '';
+    let dist = hasDist ? (unit === 'lbs' ? round2(s.distance / 1609.344) : round2(s.distance / 1000)) : '';
+    let distUnit = hasDist ? (unit === 'lbs' ? 'miles' : 'km') : '';
+    // Level-tracking exercises: FitNotes has no level column, so the level
+    // goes out through the same proxy field its FitNotes data used. Importing
+    // this file back converts it to a level again (see convertToLevel).
+    if (LEVEL_TYPES.has(ex.type)) {
+      const src = LEVEL_SOURCES[ex.levelFrom] || LEVEL_SOURCES[DEFAULT_LEVEL_SOURCE[ex.type]];
+      const lvl = s.level > 0 ? s.level : '';
+      if (src.field === 'weight') {
+        weight = lvl;
+        weightUnit = lvl === '' ? '' : src.unit;
+      } else {
+        dist = lvl;
+        distUnit = lvl === '' ? '' : src.unit;
+      }
+    }
     lines.push([
       s.date,
       csvField(ex.name),
       csvField(cat ? cat.name : 'Other'),
       weight || '',
-      weight ? unit : '',
+      weightUnit,
       s.reps || '',
       dist,
       distUnit,
