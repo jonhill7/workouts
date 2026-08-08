@@ -437,6 +437,20 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 
 /* ---- routines ---- */
 .routine-row { padding-left: 8px; }
+.rt-done.rt-done-part { color: #fab219; font-size: 14px; }
+.rt-sets {
+  width: auto; min-width: 40px; padding: 0 6px; border-radius: 999px;
+  font-size: 13px; font-weight: 600; color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+/* today's progress toward the routine's target sets */
+.rt-progress { display: flex; align-items: center; gap: 10px; padding: 2px 16px 12px; }
+.rt-bar { flex: 1; height: 6px; border-radius: 999px; background: var(--hairline); overflow: hidden; }
+.rt-bar-fill { height: 100%; border-radius: 999px; background: var(--accent); transition: width 0.2s; }
+.rt-fill-part { background: #fab219; }
+.rt-fill-full { background: #0ca30c; }
+.rt-progress-label { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
 
 /* Streak badge: --glow (0..1, saturating at a 50-streak) drives both the
    flame's color — ember orange up to hot amber — and a drop-shadow halo that

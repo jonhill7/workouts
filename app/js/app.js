@@ -3,9 +3,12 @@ import { KG_PER_LB, parseFitNotesCSV, setKey, inferType, timeToString, parseTime
 import { loadSqlJs, looksLikeSQLite, parseFitNotesDB } from './fitnotes-db.js';
 import * as exporter from './exporter.js';
 import { renderLineChart } from './charts.js';
-import { routineStats, glowLevel, MAX_GAP_DAYS } from './streaks.js';
+import {
+  routineStats, routineItems, dayProgress, glowLevel,
+  MAX_GAP_DAYS, DEFAULT_SETS, PARTIAL_THRESHOLD,
+} from './streaks.js';
 
-export const APP_VERSION = '1.5.0';
+export const APP_VERSION = '1.6.0';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
@@ -685,8 +688,11 @@ function wireExerciseRows(root) {
         state.pickFor = null;
         const routine = await db.get('routines', routineId);
         if (routine) {
-          if (!routine.exerciseIds.includes(id)) {
-            routine.exerciseIds.push(id);
+          const items = routineItems(routine);
+          if (!items.some(it => it.exerciseId === id)) {
+            items.push({ exerciseId: id, sets: DEFAULT_SETS });
+            routine.items = items;
+            delete routine.exerciseIds;
             await db.put('routines', routine);
           }
           toast('Added to routine');
@@ -1281,20 +1287,23 @@ function streakBadgeHTML(streak) {
 async function renderRoutines() {
   const [routines, sets] = await Promise.all([db.getAll('routines'), db.getAll('sets')]);
   routines.sort((a, b) => a.name.localeCompare(b.name));
-  const statsById = new Map(routines.map(r =>
-    [r.id, routineStats(r.exerciseIds, sets, todayStr())]));
+  const infoById = new Map(routines.map(r => {
+    const items = routineItems(r);
+    return [r.id, { items, stats: routineStats(items, sets, todayStr()) }];
+  }));
   $app().innerHTML = `
     ${header({ title: 'Routines', showBack: true })}
     <main class="content">
       <button class="btn btn-ghost btn-block" id="new-routine">＋ New routine</button>
       ${routines.map(r => {
-        const st = statsById.get(r.id);
+        const { items, stats: st } = infoById.get(r.id);
+        const totalSets = items.reduce((a, it) => a + Math.max(1, it.sets || 0), 0);
         return `
         <div class="list-row" data-routine="${r.id}">
           <div class="row-label">
-            <div>${esc(r.name)}<span class="row-sub">${r.exerciseIds.length} exercise${r.exerciseIds.length === 1 ? '' : 's'}</span></div>
-            <div class="row-stats">${st.completions
-              ? `${st.completions} completion${st.completions === 1 ? '' : 's'}${st.streak ? ` · streak ${st.streak}` : ''}`
+            <div>${esc(r.name)}<span class="row-sub">${items.length} exercise${items.length === 1 ? '' : 's'} · ${totalSets} sets</span></div>
+            <div class="row-stats">${st.total
+              ? `${st.total} completion${st.total === 1 ? '' : 's'}${st.partial ? ` (${st.partial} partial)` : ''}${st.streak ? ` · streak ${st.streak}` : ''}`
               : '<span class="row-stats-empty">Not completed yet</span>'}</div>
           </div>
           ${streakBadgeHTML(st.streak)}
@@ -1302,7 +1311,7 @@ async function renderRoutines() {
         </div>`;
       }).join('') ||
         '<div class="empty-state"><p>No routines yet.</p><p class="empty-sub">Create one, or import your FitNotes backup — routines come with it.</p></div>'}
-      ${routines.length ? `<p class="setting-note">A routine counts as completed on days you log every exercise in it. Streaks survive gaps of up to ${MAX_GAP_DAYS} days.</p>` : ''}
+      ${routines.length ? `<p class="setting-note">A day counts as a completion when you log all of a routine's target sets; ${Math.round(PARTIAL_THRESHOLD * 100)}% of them counts as a partial. Streaks survive gaps of up to ${MAX_GAP_DAYS} days.</p>` : ''}
     </main>`;
   const root = $app();
   wireHeader(root);
@@ -1334,7 +1343,7 @@ function routineEditor(existing) {
   el.querySelector('[data-act=save]').onclick = async () => {
     const name = el.querySelector('#rt-name').value.trim();
     if (!name) { toast('Name is required'); return; }
-    const rec = existing ? { ...existing, name } : { name, exerciseIds: [] };
+    const rec = existing ? { ...existing, name } : { name, items: [] };
     const id = await db.put('routines', rec);
     close();
     if (!existing) pushView(() => renderRoutine(id));
@@ -1356,10 +1365,18 @@ function routineEditor(existing) {
 async function renderRoutine(routineId) {
   const routine = await db.get('routines', routineId);
   if (!routine) { back(); return; }
+  // migrate legacy exerciseIds to items in memory; persisted on the next edit
+  const items = routineItems(routine);
+  routine.items = items;
+  delete routine.exerciseIds;
   const [exercises, daySets] = await Promise.all([allExercises(), setsForDate(state.date)]);
   const exById = new Map(exercises.map(e => [e.id, e]));
   const doneToday = new Map();
   for (const s of daySets) doneToday.set(s.exerciseId, (doneToday.get(s.exerciseId) || 0) + 1);
+
+  const { done, want } = dayProgress(items, daySets);
+  const frac = want ? done / want : 0;
+  const fillCls = frac >= 1 ? 'rt-fill-full' : frac >= PARTIAL_THRESHOLD ? 'rt-fill-part' : '';
 
   $app().innerHTML = `
     ${header({
@@ -1367,15 +1384,22 @@ async function renderRoutine(routineId) {
       right: `<button class="icon-btn" id="rt-add" title="Add exercise">${icon('plus')}</button>`,
     })}
     <main class="content">
-      <div class="setting-note">${esc(fmtDateHeading(state.date))} — tap an exercise to log it. ✓ = logged today.</div>
-      ${routine.exerciseIds.map((id, i) => {
-        const ex = exById.get(id);
+      <div class="setting-note">${esc(fmtDateHeading(state.date))} — tap an exercise to log it, or its ×N to change its target sets.</div>
+      ${items.length ? `
+        <div class="rt-progress">
+          <div class="rt-bar"><div class="rt-bar-fill ${fillCls}" style="width:${Math.min(100, Math.round(frac * 100))}%"></div></div>
+          <span class="rt-progress-label">${done}/${want} sets${frac >= 1 ? ' ✓' : frac >= PARTIAL_THRESHOLD ? ' · partial' : ''}</span>
+        </div>` : ''}
+      ${items.map((it, i) => {
+        const ex = exById.get(it.exerciseId);
         if (!ex) return '';
-        const n = doneToday.get(id) || 0;
+        const t = Math.max(1, it.sets || 0);
+        const n = doneToday.get(it.exerciseId) || 0;
         return `
-          <div class="list-row routine-row" data-ex="${id}">
-            <span class="rt-done ${n ? 'rt-done-yes' : ''}">${n ? '✓' : ''}</span>
-            <span class="row-label">${esc(ex.name)}${n ? `<span class="row-sub">${n} set${n === 1 ? '' : 's'}</span>` : ''}</span>
+          <div class="list-row routine-row" data-ex="${it.exerciseId}">
+            <span class="rt-done ${n >= t ? 'rt-done-yes' : n > 0 ? 'rt-done-part' : ''}">${n >= t ? '✓' : n > 0 ? '◐' : ''}</span>
+            <span class="row-label">${esc(ex.name)}<span class="row-sub">${n}/${t} sets</span></span>
+            <button class="icon-btn rt-sets" data-sets="${i}" aria-label="Target sets for ${esc(ex.name)}">×${t}</button>
             <button class="icon-btn rt-move" data-move="${i}:-1" aria-label="Move up">▲</button>
             <button class="icon-btn rt-move" data-move="${i}:1" aria-label="Move down">▼</button>
             <button class="icon-btn" data-remove="${i}" aria-label="Remove">✕</button>
@@ -1394,16 +1418,42 @@ async function renderRoutine(routineId) {
     const id = parseInt(row.dataset.ex, 10);
     pushView(() => renderExercise(id, 'track'));
   });
+  root.querySelectorAll('[data-sets]').forEach(b => b.onclick = () => {
+    const i = parseInt(b.dataset.sets, 10);
+    const ex = exById.get(items[i].exerciseId);
+    const { el, close } = openModal(`
+      <h3>Target sets — ${esc(ex?.name || '')}</h3>
+      <div class="stepper">
+        <button class="step-btn" data-d="-1">−</button>
+        <input type="number" inputmode="numeric" step="1" min="1" id="sets-n" value="${Math.max(1, items[i].sets || 0)}">
+        <button class="step-btn" data-d="1">＋</button>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" data-act="cancel">Cancel</button>
+        <button class="btn btn-primary" data-act="save">Save</button>
+      </div>`);
+    const input = el.querySelector('#sets-n');
+    el.querySelectorAll('[data-d]').forEach(s => s.onclick = () => {
+      input.value = Math.max(1, (parseInt(input.value, 10) || 1) + parseInt(s.dataset.d, 10));
+    });
+    el.querySelector('[data-act=cancel]').onclick = close;
+    el.querySelector('[data-act=save]').onclick = async () => {
+      items[i].sets = Math.max(1, parseInt(input.value, 10) || 1);
+      await db.put('routines', routine);
+      close();
+      rerender();
+    };
+  });
   root.querySelectorAll('[data-move]').forEach(b => b.onclick = async () => {
     const [i, d] = b.dataset.move.split(':').map(Number);
     const j = i + d;
-    if (j < 0 || j >= routine.exerciseIds.length) return;
-    [routine.exerciseIds[i], routine.exerciseIds[j]] = [routine.exerciseIds[j], routine.exerciseIds[i]];
+    if (j < 0 || j >= items.length) return;
+    [items[i], items[j]] = [items[j], items[i]];
     await db.put('routines', routine);
     rerender();
   });
   root.querySelectorAll('[data-remove]').forEach(b => b.onclick = async () => {
-    routine.exerciseIds.splice(parseInt(b.dataset.remove, 10), 1);
+    items.splice(parseInt(b.dataset.remove, 10), 1);
     await db.put('routines', routine);
     rerender();
   });
@@ -1584,8 +1634,9 @@ async function handleFitNotesDBImport(file) {
   const exByName = new Map((await db.getAll('exercises')).map(e => [e.nameLower, e]));
   for (const r of parsed.routines) {
     if (haveRoutines.has(r.name.toLowerCase())) continue;
-    const ids = [];
-    for (const name of r.exercises) {
+    const items = [];
+    for (const entry of r.exercises) {
+      const name = entry.name;
       const key = name.toLowerCase();
       let ex = exByName.get(key);
       if (!ex) {
@@ -1600,10 +1651,13 @@ async function handleFitNotesDBImport(file) {
         ex.id = await db.put('exercises', ex);
         exByName.set(key, ex);
       }
-      if (!ids.includes(ex.id)) ids.push(ex.id);
+      if (!items.some(it => it.exerciseId === ex.id)) {
+        // sets: 0 means the backup had no template sets for this exercise
+        items.push({ exerciseId: ex.id, sets: Math.max(1, entry.sets || DEFAULT_SETS) });
+      }
     }
-    if (ids.length) {
-      await db.put('routines', { name: r.name, exerciseIds: ids });
+    if (items.length) {
+      await db.put('routines', { name: r.name, items });
       routinesAdded++;
     }
   }

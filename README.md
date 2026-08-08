@@ -55,13 +55,17 @@ any prior CSV import), per-exercise notes, and routines.
 - **PR detection**: 🏆 marks any set that beats your previous best weight at
   the same or higher reps (longest distance/duration for cardio), with a
   toast the moment you log one
-- **Routines**: ordered exercise lists (📋 on the log screen) with logged-
-  today checkmarks — imported from FitNotes backups too
-- **Routine tracking & momentum**: a routine counts as completed on any day
-  every exercise in it is logged (computed from history, so imports count
-  retroactively). The routines list shows lifetime completions plus the
-  current streak — completions no more than 7 days apart — with a flame badge
-  that glows brighter and hotter as the streak grows (up to a 50-streak)
+- **Routines**: ordered exercise lists (📋 on the log screen), each exercise
+  with a target set count (editable via its ×N chip; FitNotes backups import
+  their template set counts). The routine screen shows today's progress bar
+  and per-exercise ✓ (target met) / ◐ (in progress) marks
+- **Routine tracking & momentum**: a day is a full completion when every
+  target set is logged, and a partial completion at ≥80% of the routine's
+  sets — computed from history, so edits and imports count retroactively.
+  The routines list shows lifetime completions (full + partial) plus the
+  current streak — completions no more than 7 days apart, partials keep it
+  alive — with a flame badge that glows brighter and hotter as the streak
+  grows (up to a 50-streak)
 - Per-exercise **History**, **Graph** (max weight, est. 1RM, volume, reps —
   or distance/time/pace for cardio; 3M/6M/1Y/All ranges), and **Records**
   (PRs, rep records table)

@@ -8,27 +8,66 @@ export const MAX_GAP_DAYS = 7;
 // The glow keeps intensifying until the streak reaches this length.
 export const GLOW_CAP = 50;
 
+// Per-exercise set target used for new routine entries and for legacy
+// routines saved before targets existed.
+export const DEFAULT_SETS = 3;
+
+// A day scoring at least this fraction of the routine's target sets counts
+// as a partial completion; hitting every target is a full completion.
+export const PARTIAL_THRESHOLD = 0.8;
+
+// Routines store items: [{exerciseId, sets}]. Normalize records written
+// before set targets existed (bare exerciseIds arrays, e.g. restored from an
+// old JSON backup).
+export function routineItems(routine) {
+  if (routine.items) return routine.items;
+  return (routine.exerciseIds || []).map(id => ({ exerciseId: id, sets: DEFAULT_SETS }));
+}
+
+const targetOf = it => Math.max(1, it.sets || 0);
+
 // Whole days between two 'YYYY-MM-DD' strings (parsed as UTC, so exact).
 export function daysBetween(a, b) {
   return Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
 }
 
-// A routine counts as completed on a date when every one of its exercises has
-// at least one set logged that day. Returns completion dates ascending.
-export function completionDates(exerciseIds, sets) {
-  const want = new Set(exerciseIds);
-  if (!want.size) return [];
-  const byDate = new Map(); // date -> Set of the routine's exerciseIds seen
-  for (const s of sets) {
-    if (!want.has(s.exerciseId)) continue;
-    let seen = byDate.get(s.date);
-    if (!seen) byDate.set(s.date, seen = new Set());
-    seen.add(s.exerciseId);
+// Sets logged toward the routine's targets on one day's sets: each exercise
+// contributes at most its target. Returns {done, want}.
+export function dayProgress(items, daySets) {
+  const target = new Map();
+  for (const it of items) {
+    target.set(it.exerciseId, (target.get(it.exerciseId) || 0) + targetOf(it));
   }
-  return [...byDate.entries()]
-    .filter(([, seen]) => seen.size === want.size)
-    .map(([date]) => date)
-    .sort();
+  const counts = new Map();
+  for (const s of daySets) {
+    if (target.has(s.exerciseId)) counts.set(s.exerciseId, (counts.get(s.exerciseId) || 0) + 1);
+  }
+  let done = 0, want = 0;
+  for (const [exId, t] of target) {
+    want += t;
+    done += Math.min(counts.get(exId) || 0, t);
+  }
+  return { done, want };
+}
+
+// Every day that reached PARTIAL_THRESHOLD of the routine's target sets.
+// Returns [{date, done, want, full}] ascending by date.
+export function completions(items, sets) {
+  if (!items.length) return [];
+  const ids = new Set(items.map(it => it.exerciseId));
+  const byDate = new Map();
+  for (const s of sets) {
+    if (!ids.has(s.exerciseId)) continue;
+    let day = byDate.get(s.date);
+    if (!day) byDate.set(s.date, day = []);
+    day.push(s);
+  }
+  const out = [];
+  for (const [date, daySets] of byDate) {
+    const { done, want } = dayProgress(items, daySets);
+    if (done / want >= PARTIAL_THRESHOLD) out.push({ date, done, want, full: done === want });
+  }
+  return out.sort((a, b) => (a.date < b.date ? -1 : 1));
 }
 
 // Length of the completion chain ending at the most recent completion, where
@@ -44,12 +83,17 @@ export function currentStreak(dates, today) {
   return streak;
 }
 
-export function routineStats(exerciseIds, sets, today) {
-  const dates = completionDates(exerciseIds, sets);
+// {total, full, partial, streak, lastDate}. Partial completions count toward
+// the streak too — they kept the habit alive.
+export function routineStats(items, sets, today) {
+  const comps = completions(items, sets);
+  const full = comps.filter(c => c.full).length;
   return {
-    completions: dates.length,
-    streak: currentStreak(dates, today),
-    lastDate: dates.length ? dates[dates.length - 1] : null,
+    total: comps.length,
+    full,
+    partial: comps.length - full,
+    streak: currentStreak(comps.map(c => c.date), today),
+    lastDate: comps.length ? comps[comps.length - 1].date : null,
   };
 }
 

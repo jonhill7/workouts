@@ -35,7 +35,8 @@ export function looksLikeSQLite(bytes) {
 // Returns { rows, exerciseNotes, routines, allExercises }:
 //   rows           — normalized sets (same shape the CSV importer produces)
 //   exerciseNotes  — Map(exercise nameLower → notes text)
-//   routines       — [{ name, exercises: [exercise names in order] }]
+//   routines       — [{ name, exercises: [{ name, sets } in order] }]; sets is
+//                    the backup's template set count, 0 when it has none
 //   allExercises   — [{ name, category }] every exercise defined in the backup
 // Every table/column read is defensive: FitNotes' schema is not documented,
 // so anything missing simply yields an empty result for that feature.
@@ -111,6 +112,12 @@ export function parseFitNotesDB(db) {
   const rts = rowsOf(q('SELECT * FROM Routine'));
   const sections = rowsOf(q('SELECT * FROM RoutineSection'));
   const secExs = rowsOf(q('SELECT * FROM RoutineSectionExercise'));
+  // Template sets live one table deeper; count them per routine exercise.
+  const tmplSetCount = new Map();
+  for (const ts of rowsOf(q('SELECT * FROM RoutineSectionExerciseSet'))) {
+    const k = ts.routine_section_exercise_id;
+    tmplSetCount.set(k, (tmplSetCount.get(k) || 0) + 1);
+  }
   if (rts.length && secExs.length) {
     const secsByRoutine = new Map();
     for (const s of sections) {
@@ -124,14 +131,14 @@ export function parseFitNotesDB(db) {
     }
     const order = (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0);
     for (const r of rts) {
-      const names = [];
+      const entries = [];
       for (const s of (secsByRoutine.get(r._id) || []).sort(order)) {
         for (const it of (exsBySection.get(s._id) || []).sort(order)) {
           const e = exById.get(it.exercise_id);
-          if (e) names.push(String(e.name ?? ''));
+          if (e) entries.push({ name: String(e.name ?? ''), sets: tmplSetCount.get(it._id) || 0 });
         }
       }
-      if (names.length) routines.push({ name: String(r.name ?? 'Routine'), exercises: names });
+      if (entries.length) routines.push({ name: String(r.name ?? 'Routine'), exercises: entries });
     }
   }
 
