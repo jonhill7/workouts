@@ -437,6 +437,19 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 
 /* ---- routines ---- */
 .routine-row { padding-left: 8px; }
+
+/* Streak badge: --glow (0..1, saturating at a 50-streak) drives both the
+   flame's color — ember orange up to hot amber — and a drop-shadow halo that
+   grows and brightens, so a long streak visibly burns brighter. */
+.streak-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  flex: none; padding: 0 6px;
+  font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, #ffb300 calc(var(--glow, 0) * 100%), #e25822);
+  filter: drop-shadow(0 0 calc(2px + var(--glow, 0) * 10px)
+          color-mix(in srgb, #ffab00 calc(35% + var(--glow, 0) * 65%), transparent));
+}
+.streak-badge .svg-icon { width: 16px; height: 16px; }
 .rt-done {
   width: 26px; text-align: center; flex: none;
   color: #0ca30c; font-weight: 700; font-size: 16px;

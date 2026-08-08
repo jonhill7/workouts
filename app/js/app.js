@@ -3,8 +3,9 @@ import { KG_PER_LB, parseFitNotesCSV, setKey, inferType, timeToString, parseTime
 import { loadSqlJs, looksLikeSQLite, parseFitNotesDB } from './fitnotes-db.js';
 import * as exporter from './exporter.js';
 import { renderLineChart } from './charts.js';
+import { routineStats, glowLevel, MAX_GAP_DAYS } from './streaks.js';
 
-export const APP_VERSION = '1.4.2';
+export const APP_VERSION = '1.5.0';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
@@ -21,6 +22,7 @@ const ICONS = {
   today: 'M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8h-1.5z',
   pencil: 'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z',
   plus: 'M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z',
+  flame: 'M13.5.67s.74 2.65.74 4.8c0 2.06-1.35 3.73-3.41 3.73-2.07 0-3.63-1.67-3.63-3.73l.03-.36C5.21 7.51 4 10.62 4 14c0 4.42 3.58 8 8 8s8-3.58 8-8C20 8.61 17.41 3.8 13.5.67zM11.71 19c-1.78 0-3.22-1.4-3.22-3.14 0-1.62 1.05-2.76 2.81-3.12 1.77-.36 3.6-1.21 4.62-2.58.39 1.29.59 2.65.59 4.04 0 2.65-2.15 4.8-4.8 4.8z',
 };
 
 const icon = name =>
@@ -1265,19 +1267,42 @@ async function renderRecordsTab(body, ex) {
 // ---------------------------------------------------------------------------
 // Routines — ordered exercise lists; work down the list on gym day.
 
+// Glowing flame badge: the brighter (and hotter-colored) the glow, the longer
+// the current streak. Intensity keeps growing until GLOW_CAP completions.
+function streakBadgeHTML(streak) {
+  if (!streak) return '';
+  return `
+    <span class="streak-badge" style="--glow:${glowLevel(streak).toFixed(3)}"
+      title="${streak} completion${streak === 1 ? '' : 's'} in a row">
+      ${icon('flame')}<span class="streak-count">${streak}</span>
+    </span>`;
+}
+
 async function renderRoutines() {
-  const routines = await db.getAll('routines');
+  const [routines, sets] = await Promise.all([db.getAll('routines'), db.getAll('sets')]);
   routines.sort((a, b) => a.name.localeCompare(b.name));
+  const statsById = new Map(routines.map(r =>
+    [r.id, routineStats(r.exerciseIds, sets, todayStr())]));
   $app().innerHTML = `
     ${header({ title: 'Routines', showBack: true })}
     <main class="content">
       <button class="btn btn-ghost btn-block" id="new-routine">＋ New routine</button>
-      ${routines.map(r => `
+      ${routines.map(r => {
+        const st = statsById.get(r.id);
+        return `
         <div class="list-row" data-routine="${r.id}">
-          <span class="row-label">${esc(r.name)}<span class="row-sub">${r.exerciseIds.length} exercises</span></span>
+          <div class="row-label">
+            <div>${esc(r.name)}<span class="row-sub">${r.exerciseIds.length} exercise${r.exerciseIds.length === 1 ? '' : 's'}</span></div>
+            <div class="row-stats">${st.completions
+              ? `${st.completions} completion${st.completions === 1 ? '' : 's'}${st.streak ? ` · streak ${st.streak}` : ''}`
+              : '<span class="row-stats-empty">Not completed yet</span>'}</div>
+          </div>
+          ${streakBadgeHTML(st.streak)}
           <button class="icon-btn" data-editroutine="${r.id}">⋮</button>
-        </div>`).join('') ||
+        </div>`;
+      }).join('') ||
         '<div class="empty-state"><p>No routines yet.</p><p class="empty-sub">Create one, or import your FitNotes backup — routines come with it.</p></div>'}
+      ${routines.length ? `<p class="setting-note">A routine counts as completed on days you log every exercise in it. Streaks survive gaps of up to ${MAX_GAP_DAYS} days.</p>` : ''}
     </main>`;
   const root = $app();
   wireHeader(root);

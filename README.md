@@ -57,6 +57,11 @@ any prior CSV import), per-exercise notes, and routines.
   toast the moment you log one
 - **Routines**: ordered exercise lists (📋 on the log screen) with logged-
   today checkmarks — imported from FitNotes backups too
+- **Routine tracking & momentum**: a routine counts as completed on any day
+  every exercise in it is logged (computed from history, so imports count
+  retroactively). The routines list shows lifetime completions plus the
+  current streak — completions no more than 7 days apart — with a flame badge
+  that glows brighter and hotter as the streak grows (up to a 50-streak)
 - Per-exercise **History**, **Graph** (max weight, est. 1RM, volume, reps —
   or distance/time/pace for cardio; 3M/6M/1Y/All ranges), and **Records**
   (PRs, rep records table)
@@ -83,6 +88,7 @@ avoids, so backups are one tap instead:
 ```sh
 node tests/importer.test.mjs        # unit tests for the CSV import logic
 node tests/fitnotes-db.test.mjs     # unit tests for the .fitnotes SQLite parser
+node tests/streaks.test.mjs         # unit tests for routine completion/streaks
 python3 -m http.server -d app 8000  # run locally at http://localhost:8000
 ```
 
