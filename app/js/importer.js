@@ -206,6 +206,58 @@ export function parseFitNotesCSV(text) {
   return { rows, errors };
 }
 
+// ---------------------------------------------------------------------------
+// Level tracking. FitNotes only records weight and distance, so users who
+// wanted to track a set number ("max reps on my 2nd set of pushups") or a
+// machine resistance level abused those fields as proxies — weight 2 lbs
+// meaning "set 2", distance 8 m meaning "resistance 8". This app stores that
+// number properly as a unit-less integer `level` on the set, via the
+// `level_reps` and `level_time` exercise types.
+//
+// An exercise's `levelFrom` names the proxy encoding its historic FitNotes
+// data used. It drives three things: the one-time conversion of already-stored
+// sets, the automatic conversion of rows in every future import, and the
+// reverse mapping on CSV export (so exports stay FitNotes-compatible and
+// round-trip losslessly).
+
+export const LEVEL_TYPES = new Set(['level_reps', 'level_time']);
+
+// Internal storage is always kg (weight) / metres (distance); `perUnit`
+// converts from storage back to the unit the level was logged in.
+export const LEVEL_SOURCES = {
+  weight_lbs: { label: 'Weight (lbs)', field: 'weight', unit: 'lbs', perUnit: KG_PER_LB },
+  weight_kg: { label: 'Weight (kg)', field: 'weight', unit: 'kg', perUnit: 1 },
+  distance_m: { label: 'Distance (m)', field: 'distance', unit: 'm', perUnit: 1 },
+  distance_km: { label: 'Distance (km)', field: 'distance', unit: 'km', perUnit: 1000 },
+};
+
+export const DEFAULT_LEVEL_SOURCE = {
+  level_reps: 'weight_lbs',
+  level_time: 'distance_m',
+};
+
+// Read the level a proxy field encodes. Accepts both stored-set field names
+// (weight/distance) and import-row names (weightKg/distanceM).
+export function levelFromSet(source, s) {
+  const src = LEVEL_SOURCES[source];
+  if (!src) return 0;
+  const raw = src.field === 'weight'
+    ? (s.weightKg ?? s.weight ?? 0)
+    : (s.distanceM ?? s.distance ?? 0);
+  return Math.max(0, Math.round(raw / src.perUnit));
+}
+
+// Copy of a set/row with the proxy value moved into `level` and the proxy
+// field zeroed. Sets that already carry a level pass through untouched.
+export function convertToLevel(source, s) {
+  if (s.level > 0 || !LEVEL_SOURCES[source]) return s;
+  const out = { ...s, level: levelFromSet(source, s) };
+  const zero = LEVEL_SOURCES[source].field === 'weight'
+    ? ['weight', 'weightKg'] : ['distance', 'distanceM'];
+  for (const f of zero) if (f in out) out[f] = 0;
+  return out;
+}
+
 // Identity key for duplicate detection. Weight compares at 0.01 kg and
 // distance at 1 m so the same set imported via CSV (unit-converted) and via
 // the .fitnotes SQLite backup (raw metric) still matches despite rounding
@@ -220,6 +272,7 @@ export function setKey(exerciseLower, s) {
     s.reps ?? 0,
     Math.round(s.distanceM ?? s.distance ?? 0),
     Math.round(s.timeSec ?? s.time ?? 0),
+    s.level ?? 0,
     s.comment ?? '',
   ].join('|');
 }

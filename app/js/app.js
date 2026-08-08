@@ -1,5 +1,8 @@
 import * as db from './db.js';
-import { KG_PER_LB, parseFitNotesCSV, setKey, inferType, timeToString, parseTimeToSeconds } from './importer.js';
+import {
+  KG_PER_LB, parseFitNotesCSV, setKey, inferType, timeToString, parseTimeToSeconds,
+  LEVEL_TYPES, LEVEL_SOURCES, DEFAULT_LEVEL_SOURCE, levelFromSet, convertToLevel,
+} from './importer.js';
 import { loadSqlJs, looksLikeSQLite, parseFitNotesDB } from './fitnotes-db.js';
 import * as exporter from './exporter.js';
 import { renderLineChart } from './charts.js';
@@ -8,7 +11,7 @@ import {
   MAX_GAP_DAYS, DEFAULT_SETS, PARTIAL_THRESHOLD,
 } from './streaks.js';
 
-export const APP_VERSION = '1.6.0';
+export const APP_VERSION = '1.7.0';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
@@ -141,19 +144,33 @@ function distUnitLabel() { return isMetric() ? 'km' : 'mi'; }
 function mToDisplayDist(m) { return isMetric() ? m / 1000 : m / 1609.344; }
 function displayDistToM(v) { return isMetric() ? v * 1000 : v * 1609.344; }
 
+// Exercise types. `level` is a unit-less small integer — either the set
+// number within a session (pushups: set 1, set 2…) or a resistance level
+// (elliptical program, band strength); ex.levelKind says which, and only
+// changes labels, prefill behavior and record wording.
+const typeUsesLevel = t => LEVEL_TYPES.has(t);
+const typeUsesReps = t => t === 'weight_reps' || t === 'level_reps';
+const typeUsesTime = t => t === 'distance_time' || t === 'level_time';
+const levelNoun = ex => ex.levelKind === 'resistance' ? 'Level' : 'Set';
+const levelFieldTitle = ex => ex.levelKind === 'resistance' ? 'RESISTANCE LEVEL' : 'SET #';
+
 // FitNotes shows sets as two columns: "185 lbs | 8 reps" (or distance | time).
-function describeCols(s, type) {
-  if (type === 'distance_time') {
+function describeCols(s, ex) {
+  if (ex.type === 'distance_time') {
     return [
       s.distance > 0 ? `${fmtNum(mToDisplayDist(s.distance))} ${distUnitLabel()}` : '—',
       s.time > 0 ? timeToString(s.time) : '—',
     ];
   }
+  if (ex.type === 'level_reps') return [`${levelNoun(ex)} ${s.level || 0}`, `${s.reps} reps`];
+  if (ex.type === 'level_time') {
+    return [`${levelNoun(ex)} ${s.level || 0}`, s.time > 0 ? timeToString(s.time) : '—'];
+  }
   return [`${fmtWeight(s.weight)} ${getUnit()}`, `${s.reps} reps`];
 }
 
-function setRowHTML(s, type, i, extra = '', isPR = false) {
-  const [a, b] = describeCols(s, type);
+function setRowHTML(s, ex, i, extra = '', isPR = false) {
+  const [a, b] = describeCols(s, ex);
   return `
     <div class="set-row ${extra}" ${extra ? `data-set="${s.id}"` : ''}>
       <span class="set-num">${i + 1}</span>
@@ -186,6 +203,20 @@ function computePRIds(sortedSets, type) {
         if (bestTime > 0 && s.time > bestTime) ids.add(s.id);
         bestTime = Math.max(bestTime, s.time);
       }
+    }
+    return ids;
+  }
+  // Level types: compare only within the same level — 20 reps on your 3rd
+  // set (or on band 3) says nothing about your 1st-set record.
+  if (typeUsesLevel(type)) {
+    const bestByLevel = new Map();
+    for (const s of sortedSets) {
+      const v = type === 'level_reps' ? s.reps : s.time;
+      if (!(v > 0)) continue;
+      const lvl = s.level || 0;
+      const prev = bestByLevel.get(lvl) || 0;
+      if (prev > 0 && v > prev) ids.add(s.id);
+      if (v > prev) bestByLevel.set(lvl, v);
     }
     return ids;
   }
@@ -412,7 +443,7 @@ async function renderHome() {
   const groupsHtml = groups.map(g => {
     if (!g.exercise) return '';
     const prIds = prByEx.get(g.exercise.id) || new Set();
-    const rows = g.sets.map((s, i) => setRowHTML(s, g.exercise.type, i, '', prIds.has(s.id))).join('');
+    const rows = g.sets.map((s, i) => setRowHTML(s, g.exercise, i, '', prIds.has(s.id))).join('');
     return `
       <div class="exercise-group" data-ex="${g.exercise.id}">
         <div class="wgroup-name">${esc(g.exercise.name)}</div>
@@ -726,6 +757,14 @@ async function exerciseEditor(existing, defaultCategoryId) {
       <select id="exe-type" class="text-input">
         <option value="weight_reps" ${(!existing || existing.type === 'weight_reps') ? 'selected' : ''}>Weight × Reps</option>
         <option value="distance_time" ${existing?.type === 'distance_time' ? 'selected' : ''}>Distance / Time</option>
+        <option value="level_reps" ${existing?.type === 'level_reps' ? 'selected' : ''}>Set/Level × Reps (bodyweight, bands)</option>
+        <option value="level_time" ${existing?.type === 'level_time' ? 'selected' : ''}>Level / Time (machine resistance)</option>
+      </select>
+    </label>
+    <label class="field-label" id="exe-lvlkind-wrap" ${typeUsesLevel(existing?.type) ? '' : 'hidden'}>Level means
+      <select id="exe-lvlkind" class="text-input">
+        <option value="set" ${existing?.levelKind !== 'resistance' ? 'selected' : ''}>Set number (1st set, 2nd set…)</option>
+        <option value="resistance" ${existing?.levelKind === 'resistance' ? 'selected' : ''}>Resistance level (band, machine)</option>
       </select>
     </label>
     <label class="field-label">Notes (setup, seat height, band color…)
@@ -738,24 +777,35 @@ async function exerciseEditor(existing, defaultCategoryId) {
       <button class="btn btn-primary" data-act="save">Save</button>
     </div>`);
   el.querySelector('[data-act=cancel]').onclick = close;
+  el.querySelector('#exe-type').onchange = () => {
+    el.querySelector('#exe-lvlkind-wrap').hidden = !typeUsesLevel(el.querySelector('#exe-type').value);
+  };
   el.querySelector('[data-act=save]').onclick = async () => {
     const name = el.querySelector('#exe-name').value.trim();
     if (!name) { toast('Name is required'); return; }
+    const type = el.querySelector('#exe-type').value;
     const rec = {
       ...(existing || {}),
       name,
       nameLower: name.toLowerCase(),
       categoryId: parseInt(el.querySelector('#exe-cat').value, 10),
-      type: el.querySelector('#exe-type').value,
+      type,
       notes: el.querySelector('#exe-notes').value.trim(),
     };
+    if (typeUsesLevel(type)) {
+      rec.levelKind = el.querySelector('#exe-lvlkind').value;
+      rec.levelFrom = rec.levelFrom || DEFAULT_LEVEL_SOURCE[type];
+    }
     try {
-      await db.put('exercises', rec);
+      rec.id = await db.put('exercises', rec);
     } catch {
       toast('An exercise with that name already exists');
       return;
     }
     close();
+    if (typeUsesLevel(type) && existing && !typeUsesLevel(existing.type)) {
+      await offerLevelConversion(rec);
+    }
     rerender();
   };
   el.querySelector('[data-act=delete]')?.addEventListener('click', async () => {
@@ -772,6 +822,64 @@ async function exerciseEditor(existing, defaultCategoryId) {
     await db.del('exercises', existing.id);
     close();
     rerender();
+  });
+}
+
+// One-time migration of proxy-encoded history. When an exercise switches to a
+// level type, its old sets still hold the level in the weight or distance
+// field ("1 lbs" = set 1, "8 m" = resistance 8 — the FitNotes workaround).
+// The chosen source is saved as ex.levelFrom, so every future FitNotes
+// import converts matching rows automatically (see applyImport).
+async function offerLevelConversion(ex) {
+  const sets = await setsForExercise(ex.id);
+  const candidates = sets.filter(s => !(s.level > 0) && (s.weight > 0 || s.distance > 0));
+  if (!candidates.length) return;
+
+  const hasWeight = candidates.some(s => s.weight > 0);
+  const defaultSource = hasWeight ? 'weight_lbs' : 'distance_m';
+
+  const preview = source => {
+    const levels = candidates.map(s => levelFromSet(source, s));
+    const uniq = [...new Set(levels)].sort((a, b) => a - b);
+    const noun = levelNoun(ex).toLowerCase();
+    const rough = candidates.filter((s, i) => {
+      const src = LEVEL_SOURCES[source];
+      const raw = (src.field === 'weight' ? s.weight : s.distance) / src.perUnit;
+      return Math.abs(raw - levels[i]) > 0.01;
+    }).length;
+    return `${candidates.length} set${candidates.length === 1 ? '' : 's'} → ${noun} `
+      + (uniq.length === 1 ? `${uniq[0]}` : `${uniq[0]}–${uniq[uniq.length - 1]}`)
+      + (rough ? ` · ⚠ ${rough} value${rough === 1 ? '' : 's'} not a whole number (will be rounded)` : '');
+  };
+
+  await new Promise(resolve => {
+    const { el, close } = openModal(`
+      <h3>Convert existing sets?</h3>
+      <p class="modal-body">${candidates.length} logged set${candidates.length === 1 ? '' : 's'} of
+        <strong>${esc(ex.name)}</strong> used weight/distance as a stand-in for the
+        ${esc(levelNoun(ex).toLowerCase())} number. Convert them so history, records and graphs line up.</p>
+      <label class="field-label">The ${esc(levelNoun(ex).toLowerCase())} number was logged as
+        <select id="lvl-src" class="text-input">
+          ${Object.entries(LEVEL_SOURCES).map(([id, src]) =>
+            `<option value="${id}" ${id === defaultSource ? 'selected' : ''}>${src.label}</option>`).join('')}
+        </select>
+      </label>
+      <p class="modal-body" id="lvl-preview">${esc(preview(defaultSource))}</p>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" data-act="skip">Not now</button>
+        <button class="btn btn-primary" data-act="convert">Convert</button>
+      </div>`);
+    const sel = el.querySelector('#lvl-src');
+    sel.onchange = () => { el.querySelector('#lvl-preview').textContent = preview(sel.value); };
+    el.querySelector('[data-act=skip]').onclick = () => { close(); resolve(); };
+    el.querySelector('[data-act=convert]').onclick = async () => {
+      const source = sel.value;
+      await db.bulkPut('sets', candidates.map(s => convertToLevel(source, s)));
+      await db.put('exercises', { ...ex, levelFrom: source });
+      close();
+      toast(`Converted ${candidates.length} sets — future imports convert automatically`);
+      resolve();
+    };
   });
 }
 
@@ -871,6 +979,9 @@ async function renderExercise(exerciseId, tab) {
 
 async function renderTrackTab(body, ex) {
   const isCardio = ex.type === 'distance_time';
+  const usesLevel = typeUsesLevel(ex.type);
+  const usesReps = typeUsesReps(ex.type);
+  const usesTime = typeUsesTime(ex.type);
   const allSets = await setsForExercise(ex.id);
   const prIds = computePRIds(allSets, ex.type);
   const daySets = allSets.filter(s => s.date === state.date);
@@ -878,20 +989,29 @@ async function renderTrackTab(body, ex) {
   let selectedId = draft.selectedId && daySets.some(s => s.id === draft.selectedId) ? draft.selectedId : null;
 
   // Prefill from: selected set > draft > last set today > last workout
-  let pre = { weight: '', reps: '', dist: '', time: '', comment: '' };
+  let pre = { weight: '', reps: '', dist: '', time: '', level: '', comment: '' };
   const fillFrom = s => {
     pre = {
       weight: s.weight > 0 ? fmtWeight(s.weight) : '',
       reps: s.reps > 0 ? String(s.reps) : '',
       dist: s.distance > 0 ? fmtNum(mToDisplayDist(s.distance)) : '',
       time: s.time > 0 ? timeToString(s.time) : '',
+      level: s.level > 0 ? String(s.level) : '',
       comment: s.comment || '',
     };
   };
+  // Set numbers advance on their own: after saving set 2, the tracker offers
+  // set 3; a fresh day starts back at set 1. Resistance levels just carry over.
+  const autoAdvance = usesLevel && ex.levelKind !== 'resistance';
   if (selectedId) fillFrom(daySets.find(s => s.id === selectedId));
   else if (draft.weight !== undefined) pre = { ...pre, ...draft };
-  else if (daySets.length) fillFrom(daySets[daySets.length - 1]);
-  else if (allSets.length) fillFrom(allSets[allSets.length - 1]);
+  else if (daySets.length) {
+    fillFrom(daySets[daySets.length - 1]);
+    if (autoAdvance) pre.level = String((daySets[daySets.length - 1].level || 0) + 1);
+  } else if (allSets.length) {
+    fillFrom(allSets[allSets.length - 1]);
+    if (autoAdvance) pre.level = '1';
+  } else if (usesLevel) pre.level = '1';
   if (selectedId) pre.comment = daySets.find(s => s.id === selectedId)?.comment || '';
 
   const inc = S.weightIncrement || (isMetric() ? 2.5 : 5);
@@ -902,6 +1022,15 @@ async function renderTrackTab(body, ex) {
       : `<span class="ex-note-empty">${icon('pencil')}Add note</span>`}</button>
     <div class="track-wrap">
     <div class="track-date">${esc(fmtDateLong(state.date))}</div>
+    ${usesLevel ? `
+      <div class="field-block">
+        <div class="field-title">${levelFieldTitle(ex)}</div>
+        <div class="stepper">
+          <button class="step-btn" data-step="level:-1">−</button>
+          <input type="number" inputmode="numeric" step="1" min="0" id="in-level" value="${esc(pre.level)}">
+          <button class="step-btn" data-step="level:1">＋</button>
+        </div>
+      </div>` : ''}
     ${isCardio ? `
       <div class="field-block">
         <div class="field-title">DISTANCE (${distUnitLabel()})</div>
@@ -910,15 +1039,8 @@ async function renderTrackTab(body, ex) {
           <input type="number" inputmode="decimal" step="any" min="0" id="in-dist" value="${esc(pre.dist)}">
           <button class="step-btn" data-step="dist:0.5">＋</button>
         </div>
-      </div>
-      <div class="field-block">
-        <div class="field-title">TIME (h:mm:ss)</div>
-        <div class="stepper">
-          <button class="step-btn" data-timestep="-60">−</button>
-          <input type="text" inputmode="numeric" id="in-time" value="${esc(pre.time)}" placeholder="0:00">
-          <button class="step-btn" data-timestep="60">＋</button>
-        </div>
-      </div>` : `
+      </div>` : ''}
+    ${ex.type === 'weight_reps' ? `
       <div class="field-block">
         <div class="field-title">WEIGHT (${getUnit()})</div>
         <div class="stepper">
@@ -926,7 +1048,8 @@ async function renderTrackTab(body, ex) {
           <input type="number" inputmode="decimal" step="any" min="0" id="in-weight" value="${esc(pre.weight)}">
           <button class="step-btn" data-step="weight:${inc}">＋</button>
         </div>
-      </div>
+      </div>` : ''}
+    ${usesReps ? `
       <div class="field-block">
         <div class="field-title">REPS</div>
         <div class="stepper">
@@ -934,7 +1057,16 @@ async function renderTrackTab(body, ex) {
           <input type="number" inputmode="numeric" step="1" min="0" id="in-reps" value="${esc(pre.reps)}">
           <button class="step-btn" data-step="reps:1">＋</button>
         </div>
-      </div>`}
+      </div>` : ''}
+    ${usesTime ? `
+      <div class="field-block">
+        <div class="field-title">TIME (h:mm:ss)</div>
+        <div class="stepper">
+          <button class="step-btn" data-timestep="-60">−</button>
+          <input type="text" inputmode="numeric" id="in-time" value="${esc(pre.time)}" placeholder="0:00">
+          <button class="step-btn" data-timestep="60">＋</button>
+        </div>
+      </div>` : ''}
     <input type="text" id="in-comment" class="text-input comment-input" placeholder="Comment (optional)" value="${esc(pre.comment)}" autocomplete="off">
     <div class="track-actions">
       ${selectedId
@@ -949,7 +1081,7 @@ async function renderTrackTab(body, ex) {
     </div>
     <div class="set-list">
       ${daySets.map((s, i) =>
-        setRowHTML(s, ex.type, i, 'set-row-tappable' + (s.id === selectedId ? ' set-row-selected' : ''), prIds.has(s.id))).join('')}
+        setRowHTML(s, ex, i, 'set-row-tappable' + (s.id === selectedId ? ' set-row-selected' : ''), prIds.has(s.id))).join('')}
     </div>`;
 
   body.querySelector('#ex-note').onclick = () => {
@@ -974,20 +1106,23 @@ async function renderTrackTab(body, ex) {
     reps: parseInt(val('#in-reps'), 10) || 0,
     dist: parseFloat(val('#in-dist')) || 0,
     time: parseTimeToSeconds(val('#in-time')),
+    level: parseInt(val('#in-level'), 10) || 0,
     comment: val('#in-comment').trim(),
   });
   const saveDraft = () => {
     trackDraft[ex.id] = {
       selectedId,
       weight: val('#in-weight'), reps: val('#in-reps'),
-      dist: val('#in-dist'), time: val('#in-time'), comment: val('#in-comment'),
+      dist: val('#in-dist'), time: val('#in-time'),
+      level: val('#in-level'), comment: val('#in-comment'),
     };
   };
   body.querySelectorAll('input').forEach(i => i.addEventListener('input', saveDraft));
 
+  const stepTarget = { weight: '#in-weight', reps: '#in-reps', dist: '#in-dist', level: '#in-level' };
   body.querySelectorAll('[data-step]').forEach(b => b.onclick = () => {
     const [field, delta] = b.dataset.step.split(':');
-    const input = body.querySelector(field === 'weight' ? '#in-weight' : field === 'reps' ? '#in-reps' : '#in-dist');
+    const input = body.querySelector(stepTarget[field]);
     const cur = parseFloat(input.value) || 0;
     const next = Math.max(0, cur + parseFloat(delta));
     input.value = fmtNum(next);
@@ -1006,23 +1141,29 @@ async function renderTrackTab(body, ex) {
       ...base,
       exerciseId: ex.id,
       date: state.date,
-      weight: isCardio ? 0 : displayToKg(v.weight),
-      reps: isCardio ? 0 : v.reps,
+      weight: ex.type === 'weight_reps' ? displayToKg(v.weight) : 0,
+      reps: usesReps ? v.reps : 0,
       distance: isCardio ? displayDistToM(v.dist) : 0,
-      time: isCardio ? v.time : 0,
+      time: usesTime ? v.time : 0,
+      level: usesLevel ? v.level : 0,
       comment: v.comment,
     };
   };
 
   body.querySelector('#btn-save')?.addEventListener('click', async () => {
     const v = readInputs();
-    if (!isCardio && v.reps <= 0) { toast('Enter at least 1 rep'); return; }
+    if (usesReps && v.reps <= 0) { toast('Enter at least 1 rep'); return; }
     if (isCardio && v.dist <= 0 && v.time <= 0) { toast('Enter a distance or time'); return; }
+    if (ex.type === 'level_time' && v.time <= 0) { toast('Enter a time'); return; }
+    if (usesLevel && v.level <= 0) {
+      toast(ex.levelKind === 'resistance' ? 'Enter the resistance level' : 'Enter the set number');
+      return;
+    }
     const newId = await db.put('sets', buildRecord({ seq: nextSeq() }));
     delete trackDraft[ex.id];
     const after = await setsForExercise(ex.id);
     if (computePRIds(after, ex.type).has(newId)) toast('🏆 New personal record!');
-    if (S.restSeconds > 0 && !isCardio) restTimer.start(S.restSeconds);
+    if (S.restSeconds > 0 && usesReps) restTimer.start(S.restSeconds);
     rerender();
   });
   body.querySelector('#btn-timer')?.addEventListener('click', () => {
@@ -1041,7 +1182,7 @@ async function renderTrackTab(body, ex) {
     rerender();
   });
   body.querySelector('#btn-clear')?.addEventListener('click', () => {
-    trackDraft[ex.id] = { selectedId: null, weight: '', reps: '', dist: '', time: '', comment: '' };
+    trackDraft[ex.id] = { selectedId: null, weight: '', reps: '', dist: '', time: '', level: '', comment: '' };
     rerender();
   });
   body.querySelectorAll('[data-set]').forEach(row => row.onclick = () => {
@@ -1078,7 +1219,7 @@ async function renderHistoryTab(body, ex) {
       <div class="history-day" data-date="${date}">
         <div class="history-date">${esc(fmtDateLong(date))}</div>
         ${byDate.get(date).map((s, i) => {
-          const [a, b] = describeCols(s, ex.type);
+          const [a, b] = describeCols(s, ex);
           return `
           <div class="set-row">
             <span class="set-num">${i + 1}</span>
@@ -1115,6 +1256,15 @@ const GRAPH_METRICS = {
     ['time', 'Time'],
     ['pace', 'Pace'],
   ],
+  level_reps: [
+    ['maxReps', 'Max Reps'],
+    ['totalReps', 'Total Reps'],
+    ['maxLevel', 'Max Level'],
+  ],
+  level_time: [
+    ['time', 'Time'],
+    ['maxLevel', 'Max Level'],
+  ],
 };
 const GRAPH_RANGES = [['3m', '3M', 91], ['6m', '6M', 182], ['1y', '1Y', 365], ['all', 'All', Infinity]];
 const graphPrefs = {}; // per-exercise metric/range selection
@@ -1141,6 +1291,7 @@ async function renderGraphTab(body, ex) {
       case 'volume': return kgToDisplay(daySets.reduce((a, s) => a + s.weight * s.reps, 0));
       case 'maxReps': return Math.max(...daySets.map(s => s.reps));
       case 'totalReps': return daySets.reduce((a, s) => a + s.reps, 0);
+      case 'maxLevel': return Math.max(...daySets.map(s => s.level || 0));
       case 'distance': return daySets.reduce((a, s) => a + mToDisplayDist(s.distance), 0);
       case 'time': return daySets.reduce((a, s) => a + s.time, 0) / 60; // minutes
       case 'pace': {
@@ -1158,7 +1309,7 @@ async function renderGraphTab(body, ex) {
 
   const unitFor = {
     maxWeight: getUnit(), e1rm: getUnit(), volume: getUnit(),
-    maxReps: 'reps', totalReps: 'reps',
+    maxReps: 'reps', totalReps: 'reps', maxLevel: '',
     distance: distUnitLabel(), time: 'min', pace: `min/${distUnitLabel()}`,
   }[pref.metric] || '';
 
@@ -1220,6 +1371,52 @@ async function renderRecordsTab(body, ex) {
       ${maxTime ? tile('Longest time', timeToString(maxTime.time), maxTime.date) : ''}
       ${bestPace ? tile('Best pace', `${fmtNum(bestPace.pace / 60, 1)} min/${distUnitLabel()}`, bestPace.date) : ''}
     </div></div>`;
+    return;
+  }
+
+  if (typeUsesLevel(ex.type)) {
+    const isReps = ex.type === 'level_reps';
+    const noun = levelNoun(ex);
+    const bestByLevel = new Map(); // level -> best set
+    let best = null, topLevel = null;
+    for (const s of sets) {
+      const v = isReps ? s.reps : s.time;
+      if (!(v > 0)) continue;
+      const lvl = s.level || 0;
+      const cur = bestByLevel.get(lvl);
+      if (!cur || v > (isReps ? cur.reps : cur.time)) bestByLevel.set(lvl, s);
+      if (!best || v > (isReps ? best.reps : best.time)) best = s;
+      if (lvl > 0 && (!topLevel || lvl > (topLevel.level || 0))) topLevel = s;
+    }
+    const tile = (label, value, date) => `
+      <div class="stat-tile">
+        <div class="stat-label">${label}</div>
+        <div class="stat-value">${value}</div>
+        <div class="stat-date">${esc(fmtDateLong(date))}</div>
+      </div>`;
+    const levelRows = [...bestByLevel.keys()].sort((a, b) => a - b).map(l => {
+      const s = bestByLevel.get(l);
+      return `<tr><td>${l}</td><td>${isReps ? `${s.reps} reps` : timeToString(s.time)}</td><td class="rec-date">${esc(s.date)}</td></tr>`;
+    }).join('');
+    body.innerHTML = `
+      <div class="records-wrap">
+      <div class="stat-grid">
+        ${best ? tile(isReps ? 'Most reps' : 'Longest time',
+          isReps ? `${best.reps} × ${noun.toLowerCase()} ${best.level || 0}` : timeToString(best.time), best.date) : ''}
+        ${topLevel ? tile(`Highest ${noun.toLowerCase()}`, String(topLevel.level), topLevel.date) : ''}
+        <div class="stat-tile">
+          <div class="stat-label">Lifetime</div>
+          <div class="stat-value">${sets.length} sets</div>
+          <div class="stat-date">${[...new Set(sets.map(s => s.date))].size} workouts</div>
+        </div>
+      </div>
+      ${levelRows ? `
+        <div class="chart-title">Best ${isReps ? 'reps' : 'time'} per ${noun.toLowerCase()}</div>
+        <table class="rec-table">
+          <thead><tr><th>${noun}</th><th>Best</th><th>Date</th></tr></thead>
+          <tbody>${levelRows}</tbody>
+        </table>` : ''}
+      </div>`;
     return;
   }
 
@@ -1533,6 +1730,16 @@ async function applyImport(rows) {
     stats.newExercises++;
   }
 
+  // Level-tracking exercises store their conversion rule (levelFrom), so
+  // rows straight out of FitNotes — where the level still hides in the
+  // weight or distance column — convert automatically on every import.
+  // Must happen before dedupe keys are computed so converted rows match
+  // previously converted sets.
+  rows = rows.map(r => {
+    const ex = exByName.get(r.exercise.toLowerCase());
+    return ex && LEVEL_TYPES.has(ex.type) && ex.levelFrom ? convertToLevel(ex.levelFrom, r) : r;
+  });
+
   // multiset diff against existing sets so re-imports are idempotent
   const existing = await db.getAll('sets');
   const exById = new Map([...exByName.values()].map(e => [e.id, e]));
@@ -1560,6 +1767,7 @@ async function applyImport(rows) {
       reps: r.reps,
       distance: r.distanceM,
       time: r.timeSec,
+      level: r.level || 0,
       comment: r.comment,
       seq: nextSeq(),
     });

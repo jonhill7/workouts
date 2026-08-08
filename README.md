@@ -69,6 +69,21 @@ any prior CSV import), per-exercise notes, and routines.
 - Per-exercise **History**, **Graph** (max weight, est. 1RM, volume, reps —
   or distance/time/pace for cardio; 3M/6M/1Y/All ranges), and **Records**
   (PRs, rep records table)
+- **Set-number / resistance-level tracking**: two extra exercise types log a
+  unit-less integer **level** alongside reps or time — "Set/Level × Reps" for
+  bodyweight work tracked by set number (max reps on your 1st set, 2nd set…)
+  or by band strength, and "Level / Time" for machine resistance (elliptical,
+  bike). Records and 🏆 PRs compare within the same level, and the tracker
+  auto-advances the set number as you log
+- **Proxy conversion for FitNotes refugees**: FitNotes can't track a set
+  number or resistance, so a common workaround was logging it in the weight
+  or distance field (weight "2 lbs" = 2nd set, distance "8 m" = resistance 8).
+  Switch such an exercise to a level type (edit it via ⋮) and the app offers
+  to convert its history in one tap — you pick which field/unit encoded the
+  level. The choice is saved on the exercise, so **every future CSV or
+  .fitnotes import converts those rows automatically** (and stays
+  duplicate-safe), and CSV exports write the level back through the same
+  field, keeping them FitNotes-compatible
 - Rest timer with vibration
 - kg/lbs display toggle (stored metric internally, like FitNotes)
 - Works fully offline; light + dark theme
