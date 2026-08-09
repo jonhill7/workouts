@@ -12,11 +12,11 @@ import {
   MAX_GAP_DAYS, DEFAULT_SETS, PARTIAL_THRESHOLD,
 } from './streaks.js';
 import {
-  PROGRAMS, COURSE_EXERCISES, programById, courseById,
-  dayLabel, daySetCount, blockTarget, nextDayIndex,
+  PROGRAMS, COURSES, COURSE_EXERCISES, programById, courseById, programOfCourse,
+  dayLabel, daySetCount, blockTarget, nextDayIndex, courseStreak, weekCount,
 } from './courses.js';
 
-export const APP_VERSION = '1.9.0';
+export const APP_VERSION = '1.10.0';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
@@ -411,6 +411,30 @@ async function renderHome() {
       </div>`;
   }).join('');
 
+  // Classes she's officially in, pinned below the day's log for one-tap access.
+  const activeCourses = COURSES.filter(c => {
+    const p = courseProgress(c.id);
+    return p.active && nextDayIndex(c, p.days) !== -1;
+  });
+  const classCardsHtml = activeCourses.map(c => {
+    const prog = courseProgress(c.id);
+    const program = programOfCourse(c.id);
+    const next = nextDayIndex(c, prog.days);
+    const doneCount = Object.keys(prog.days).length;
+    const wkN = weekCount(prog.days, todayStr());
+    return `
+      <div class="list-row course-row class-card" data-gocourse="${c.id}">
+        <span class="course-emoji">${c.emoji}</span>
+        <div class="row-label">
+          <div>${esc(c.name)}<span class="row-sub">${esc(program.name)} · ${esc(c.levelLabel)}</span></div>
+          <div class="row-stats">Next up: ${dayLabel(c, next)} — ${esc(c.days[next].title)}</div>
+          <div class="row-stats">${wkN} of ${c.daysPerWeek} workouts this week · ${doneCount} of ${c.days.length} total</div>
+        </div>
+        ${streakBadgeHTML(courseStreak(prog.days, todayStr()))}
+        <span class="row-chevron">›</span>
+      </div>`;
+  }).join('');
+
   $app().innerHTML = `
     ${header({
       title: 'Workout Log',
@@ -429,8 +453,11 @@ async function renderHome() {
       ${groupsHtml || `
         <div class="empty-state">
           <p>Workout log is empty.</p>
-          <p class="empty-sub">Press the + button to add an exercise.</p>
+          <p class="empty-sub">${classCardsHtml
+            ? 'Tap your class below to do today’s workout.'
+            : 'Press the + button to add an exercise.'}</p>
         </div>`}
+      ${classCardsHtml ? `<div class="settings-section">Current class</div>${classCardsHtml}` : ''}
       <div class="fab-space"></div>
     </main>
     <button class="fab" id="fab-add" aria-label="Add exercise">＋</button>`;
@@ -450,6 +477,10 @@ async function renderHome() {
   root.querySelectorAll('.exercise-group').forEach(card => card.onclick = () => {
     const ex = exById.get(parseInt(card.dataset.ex, 10));
     if (ex) pushView(() => renderExercise(ex.id, 'track'));
+  });
+  root.querySelectorAll('[data-gocourse]').forEach(card => card.onclick = () => {
+    const id = card.dataset.gocourse;
+    pushView(() => renderCourse(id));
   });
 }
 
@@ -1449,15 +1480,21 @@ async function renderRoutines() {
     <main class="content">
       <div class="settings-section">Classes</div>
       ${PROGRAMS.map(p => {
-        // Surface the furthest-along level with any progress on the class row.
-        const active = [...p.levels].reverse().find(c => Object.keys(courseProgress(c.id).days).length);
-        let status = esc(p.tagline);
-        if (active) {
-          const prog = courseProgress(active.id);
-          const next = nextDayIndex(active, prog.days);
+        // Surface the enrolled level if there is one, else the furthest level
+        // with any progress.
+        const enrolled = p.levels.find(c => {
+          const pr = courseProgress(c.id);
+          return pr.active && nextDayIndex(c, pr.days) !== -1;
+        });
+        const shown = enrolled || [...p.levels].reverse().find(c => Object.keys(courseProgress(c.id).days).length);
+        let status = esc(p.tagline), badge = '';
+        if (shown) {
+          const prog = courseProgress(shown.id);
+          const next = nextDayIndex(shown, prog.days);
           status = next === -1
-            ? `🏆 ${esc(active.name)} complete!`
-            : `${esc(active.name)}: ${Object.keys(prog.days).length} of ${active.days.length} workouts done`;
+            ? `🏆 ${esc(shown.name)} complete!`
+            : `${enrolled ? '▶ ' : ''}${esc(shown.name)}: ${Object.keys(prog.days).length} of ${shown.days.length} workouts done`;
+          badge = streakBadgeHTML(courseStreak(prog.days, todayStr()));
         }
         return `
         <div class="list-row course-row" data-program="${p.id}">
@@ -1466,6 +1503,7 @@ async function renderRoutines() {
             <div>${esc(p.name)}<span class="row-sub">3 levels · ${p.levels[0].weeks}–${p.levels[2].weeks} weeks</span></div>
             <div class="row-stats">${status}</div>
           </div>
+          ${badge}
           <span class="row-chevron">›</span>
         </div>`;
       }).join('')}
@@ -1641,15 +1679,24 @@ async function renderRoutine(routineId) {
 }
 
 // ---------------------------------------------------------------------------
-// Guided courses — preloaded multi-week programs (data in courses.js). Every
+// Guided classes — preloaded multi-week programs (data in courses.js). Every
 // day is a checklist: tap a set circle and a normal set record is written, so
 // history, PRs and the calendar all see course workouts like any other.
 // Progress lives in the courseProgress setting:
-//   { [courseId]: { startedAt: 'YYYY-MM-DD'|null, days: { [dayIdx]: date } } }
+//   { [courseId]: { startedAt, finishedAt, active, days: { [dayIdx]: date } } }
+// `active` marks the class as officially started (shown on the home screen)
+// until it's finished or left. Records written before the field existed
+// count as active while they have progress and no finish date.
 
 function courseProgress(courseId) {
   const p = (S.courseProgress || {})[courseId];
-  return { startedAt: p?.startedAt || null, days: { ...(p?.days || {}) } };
+  const days = { ...(p?.days || {}) };
+  return {
+    startedAt: p?.startedAt || null,
+    finishedAt: p?.finishedAt || null,
+    active: p?.active ?? (Object.keys(days).length > 0 && !p?.finishedAt),
+    days,
+  };
 }
 
 async function saveCourseProgress(courseId, prog) {
@@ -1721,7 +1768,7 @@ async function renderProgram(programId) {
           ? esc(c.tagline)
           : next === -1
             ? '🏆 Complete!'
-            : `${doneCount} of ${c.days.length} workouts done · next up: ${dayLabel(c, next)}`;
+            : `${prog.active ? '▶ ' : ''}${doneCount} of ${c.days.length} workouts done · next up: ${dayLabel(c, next)}`;
         return `
         <div class="list-row course-row" data-level="${c.id}">
           <span class="level-badge level-${c.level}">${c.level}</span>
@@ -1729,6 +1776,7 @@ async function renderProgram(programId) {
             <div>${esc(c.name)}<span class="row-sub">${esc(c.levelLabel)} · ${c.weeks} weeks · ${c.daysPerWeek}×/week · ${c.minutes} min</span></div>
             <div class="row-stats">${status}</div>
           </div>
+          ${doneCount ? streakBadgeHTML(courseStreak(prog.days, todayStr())) : ''}
           <span class="row-chevron">›</span>
         </div>`;
       }).join('')}
@@ -1748,6 +1796,8 @@ async function renderCourse(courseId) {
   const prog = courseProgress(courseId);
   const doneCount = Object.keys(prog.days).length;
   const next = nextDayIndex(course, prog.days);
+  const streak = courseStreak(prog.days, todayStr());
+  const wkN = weekCount(prog.days, todayStr());
 
   const weeksHtml = [];
   for (let w = 0; w < course.weeks; w++) {
@@ -1777,20 +1827,52 @@ async function renderCourse(courseId) {
         <div class="course-desc">${esc(course.description)}</div>
         <div class="course-meta">${esc(course.levelLabel)} level · ${course.weeks} weeks · ${course.daysPerWeek} workouts a week · about ${course.minutes} minutes each · no equipment</div>
       </div>
+      ${doneCount ? `
+        <div class="course-stats">
+          ${streakBadgeHTML(streak)}
+          <span>${doneCount} of ${course.days.length} workouts done</span>
+          <span>·</span>
+          <span>${wkN} of ${course.daysPerWeek} this week</span>
+        </div>` : ''}
       ${next === -1
-        ? `<div class="day-done-banner">🏆 Course complete — all ${course.days.length} workouts. Amazing!</div>`
-        : `<button class="btn btn-primary btn-block course-cta" id="course-go">
-             ${doneCount ? 'Continue' : 'Start'}: ${dayLabel(course, next)} — ${esc(course.days[next].title)}
-           </button>`}
+        ? `<div class="day-done-banner">🏆 Class complete — all ${course.days.length} workouts${prog.finishedAt ? ` (finished ${esc(fmtDateLong(prog.finishedAt))})` : ''}. Amazing!</div>`
+        : prog.active
+          ? `<button class="btn btn-primary btn-block course-cta" id="course-go">
+               Next up: ${dayLabel(course, next)} — ${esc(course.days[next].title)}
+             </button>`
+          : `<button class="btn btn-primary btn-block course-cta" id="course-go">
+               ${doneCount ? `Rejoin: ${dayLabel(course, next)} — ${esc(course.days[next].title)}` : 'Start this class'}
+             </button>`}
       ${weeksHtml.join('')}
+      ${prog.active && next !== -1 ? '<button class="btn btn-ghost btn-block course-cta" id="course-leave">Take a break from this class</button>' : ''}
       ${doneCount ? '<button class="btn btn-ghost btn-block course-cta" id="course-reset">Start over from week 1</button>' : ''}
-      <p class="setting-note">Tap any day to see or redo it. A day is checked off when you finish all its sets.</p>
+      <p class="setting-note">${prog.active
+        ? 'Your class shows on the workout log for quick access. Tap any day to see or redo it.'
+        : 'Starting a class pins it to your workout log. Tap any day to preview it.'}</p>
     </main>`;
 
   const root = $app();
   wireHeader(root);
-  root.querySelector('#course-go')?.addEventListener('click', () =>
-    pushView(() => renderCourseDay(courseId, next)));
+  root.querySelector('#course-go')?.addEventListener('click', async () => {
+    if (!prog.active) {
+      await saveCourseProgress(courseId, {
+        ...prog, active: true, finishedAt: null, startedAt: prog.startedAt || todayStr(),
+      });
+      toast(doneCount ? 'Welcome back! 💪' : `You're in — ${course.name} starts now! 💪`);
+    }
+    pushView(() => renderCourseDay(courseId, next));
+  });
+  root.querySelector('#course-leave')?.addEventListener('click', async () => {
+    const ok = await confirmDialog({
+      title: 'Take a break?',
+      body: 'The class comes off your workout log, but your progress is saved — rejoin any time.',
+      okLabel: 'Take a break',
+    });
+    if (!ok) return;
+    await saveCourseProgress(courseId, { ...prog, active: false });
+    toast('Progress saved — see you soon');
+    rerender();
+  });
   root.querySelectorAll('[data-day]').forEach(b => b.onclick = () => {
     const idx = parseInt(b.dataset.day, 10);
     pushView(() => renderCourseDay(courseId, idx));
@@ -1802,7 +1884,7 @@ async function renderCourse(courseId) {
       okLabel: 'Start over', danger: true,
     });
     if (!ok) return;
-    await saveCourseProgress(courseId, { startedAt: null, days: {} });
+    await saveCourseProgress(courseId, { startedAt: null, finishedAt: null, active: false, days: {} });
     rerender();
   });
 }
@@ -1828,6 +1910,11 @@ async function renderCourseDay(courseId, dayIdx) {
   if (complete && !prog.days[dayIdx]) {
     prog.days[dayIdx] = state.date;
     if (!prog.startedAt) prog.startedAt = state.date;
+    if (nextDayIndex(course, prog.days) === -1) {
+      // That was the class's last workout — officially finished.
+      prog.active = false;
+      prog.finishedAt = state.date;
+    }
     await saveCourseProgress(courseId, prog);
   }
 
@@ -1880,11 +1967,19 @@ async function renderCourseDay(courseId, dayIdx) {
       const recs = [];
       for (let i = n; i <= k; i++) recs.push(courseSetRecord(b, ex, i, state.date));
       await db.bulkPut('sets', recs);
-      if (!prog.startedAt) await saveCourseProgress(courseId, { ...prog, startedAt: state.date });
+      // Doing a workout means you're in the class, even without a formal start.
+      if (!prog.active && nextDayIndex(course, prog.days) !== -1) {
+        await saveCourseProgress(courseId, {
+          ...prog, active: true, finishedAt: null, startedAt: prog.startedAt || state.date,
+        });
+      }
       const nowDone = done - n + Math.max(n, k + 1);
       if (nowDone >= want) {
         restTimer.stop();
-        toast(`🎉 ${dayLabel(course, dayIdx)} done — great work!`);
+        const finishesClass = nextDayIndex(course, { ...prog.days, [dayIdx]: state.date }) === -1;
+        toast(finishesClass
+          ? `🏆 ${course.name} COMPLETE — every single workout. Incredible!`
+          : `🎉 ${dayLabel(course, dayIdx)} done — great work!`);
       } else {
         restTimer.start(course.rest || S.restSeconds);
       }

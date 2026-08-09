@@ -1,8 +1,9 @@
 // Unit tests for the guided-course definitions and helpers.
 import assert from 'node:assert/strict';
 import {
-  PROGRAMS, COURSES, COURSE_EXERCISES, programById, courseById,
+  PROGRAMS, COURSES, COURSE_EXERCISES, programById, courseById, programOfCourse,
   dayLabel, daySetCount, blockTarget, nextDayIndex,
+  courseDoneDates, courseStreak, weekCount,
 } from '../app/js/courses.js';
 
 let passed = 0;
@@ -125,6 +126,37 @@ test('nextDayIndex walks completed days', () => {
   const all = {};
   for (let i = 0; i < c.days.length; i++) all[i] = '2026-01-01';
   assert.equal(nextDayIndex(c, all), -1);
+});
+
+test('programOfCourse finds the parent program', () => {
+  assert.equal(programOfCourse('fresh-start').id, 'total-body');
+  assert.equal(programOfCourse('inferno').id, 'burn');
+  assert.equal(programOfCourse('nope'), null);
+  for (const c of COURSES) assert.ok(programOfCourse(c.id));
+});
+
+test('courseDoneDates sorts and keeps duplicates', () => {
+  assert.deepEqual(courseDoneDates({ 1: '2026-01-07', 0: '2026-01-05', 2: '2026-01-07' }),
+    ['2026-01-05', '2026-01-07', '2026-01-07']);
+  assert.deepEqual(courseDoneDates(undefined), []);
+});
+
+test('courseStreak chains completions like routine streaks', () => {
+  assert.equal(courseStreak({}, '2026-01-10'), 0);
+  assert.equal(courseStreak({ 0: '2026-01-01', 1: '2026-01-05' }, '2026-01-10'), 2);
+  // last completion more than 7 days ago → streak is dead
+  assert.equal(courseStreak({ 0: '2026-01-01', 1: '2026-01-05' }, '2026-01-20'), 0);
+  // a >7-day gap breaks the chain; only the recent side counts
+  assert.equal(courseStreak({ 0: '2026-01-01', 1: '2026-01-15' }, '2026-01-16'), 1);
+});
+
+test('weekCount counts completions in the Mon–Sun week of today', () => {
+  // 2026-01-05 is a Monday
+  const days = { 0: '2026-01-04', 1: '2026-01-05', 2: '2026-01-07' };
+  assert.equal(weekCount(days, '2026-01-11'), 2); // Sunday: Mon+Wed count, prior Sun doesn't
+  assert.equal(weekCount(days, '2026-01-05'), 1); // Monday itself: Wed hasn't happened yet
+  assert.equal(weekCount(days, '2026-01-04'), 1); // prior week's Sunday sees only its own week
+  assert.equal(weekCount({}, '2026-01-11'), 0);
 });
 
 console.log(`\n${passed} tests passed`);
