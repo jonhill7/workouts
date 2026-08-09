@@ -2,7 +2,7 @@
 // Bump VERSION on every release — deploys are picked up on next visit
 // (an "Update ready" toast offers an immediate reload).
 
-const VERSION = 'v1.7.0';
+const VERSION = 'v1.7.1';
 const CACHE = `workout-log-${VERSION}`;
 
 const ASSETS = [
@@ -14,6 +14,7 @@ const ASSETS = [
   './js/db.js',
   './js/importer.js',
   './js/fitnotes-db.js',
+  './js/records.js',
   './js/exporter.js',
   './js/charts.js',
   './js/streaks.js',

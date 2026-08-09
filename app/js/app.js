@@ -4,6 +4,7 @@ import {
   LEVEL_TYPES, LEVEL_SOURCES, DEFAULT_LEVEL_SOURCE, levelFromSet, convertToLevel,
 } from './importer.js';
 import { loadSqlJs, looksLikeSQLite, parseFitNotesDB } from './fitnotes-db.js';
+import { computePRIds, repRecords } from './records.js';
 import * as exporter from './exporter.js';
 import { renderLineChart } from './charts.js';
 import {
@@ -11,7 +12,7 @@ import {
   MAX_GAP_DAYS, DEFAULT_SETS, PARTIAL_THRESHOLD,
 } from './streaks.js';
 
-export const APP_VERSION = '1.7.0';
+export const APP_VERSION = '1.7.1';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
@@ -184,51 +185,6 @@ function est1RM(weightKg, reps) {
   if (reps <= 0 || weightKg <= 0) return 0;
   if (reps === 1) return weightKg;
   return weightKg * (1 + reps / 30); // Epley
-}
-
-// PR detection. Walk the exercise's sets in chronological order; a strength
-// set is a PR when its weight beats every earlier weight lifted for the same
-// or more reps ("you've never lifted this much for this many reps"). Cardio:
-// longest distance ever (or longest duration for distance-less sets). The
-// very first record for an exercise never counts.
-function computePRIds(sortedSets, type) {
-  const ids = new Set();
-  if (type === 'distance_time') {
-    let bestDist = 0, bestTime = 0;
-    for (const s of sortedSets) {
-      if (s.distance > 0) {
-        if (bestDist > 0 && s.distance > bestDist) ids.add(s.id);
-        bestDist = Math.max(bestDist, s.distance);
-      } else if (s.time > 0) {
-        if (bestTime > 0 && s.time > bestTime) ids.add(s.id);
-        bestTime = Math.max(bestTime, s.time);
-      }
-    }
-    return ids;
-  }
-  // Level types: compare only within the same level — 20 reps on your 3rd
-  // set (or on band 3) says nothing about your 1st-set record.
-  if (typeUsesLevel(type)) {
-    const bestByLevel = new Map();
-    for (const s of sortedSets) {
-      const v = type === 'level_reps' ? s.reps : s.time;
-      if (!(v > 0)) continue;
-      const lvl = s.level || 0;
-      const prev = bestByLevel.get(lvl) || 0;
-      if (prev > 0 && v > prev) ids.add(s.id);
-      if (v > prev) bestByLevel.set(lvl, v);
-    }
-    return ids;
-  }
-  const bestByReps = new Map();
-  for (const s of sortedSets) {
-    if (!(s.weight > 0) || !(s.reps > 0)) continue;
-    let prev = 0;
-    for (const [r, w] of bestByReps) if (r >= s.reps && w > prev) prev = w;
-    if (prev > 0 && s.weight > prev + 1e-9) ids.add(s.id);
-    if (s.weight > (bestByReps.get(s.reps) || 0)) bestByReps.set(s.reps, s.weight);
-  }
-  return ids;
 }
 
 // ---------------------------------------------------------------------------
@@ -1421,18 +1377,14 @@ async function renderRecordsTab(body, ex) {
   }
 
   let maxW = null, best1 = null, maxVol = null;
-  const repRecords = new Map(); // reps -> best set
   for (const s of sets) {
     if (s.weight > 0 && (!maxW || s.weight > maxW.weight)) maxW = s;
     const e = est1RM(s.weight, s.reps);
     if (e > 0 && (!best1 || e > best1.e)) best1 = { ...s, e };
     const vol = s.weight * s.reps;
     if (vol > 0 && (!maxVol || vol > maxVol.vol)) maxVol = { ...s, vol };
-    if (s.reps >= 1 && s.reps <= 12) {
-      const cur = repRecords.get(s.reps);
-      if (!cur || s.weight > cur.weight) repRecords.set(s.reps, s);
-    }
   }
+  const bestByReps = repRecords(sets);
 
   const tile = (label, value, date) => `
     <div class="stat-tile">
@@ -1441,8 +1393,8 @@ async function renderRecordsTab(body, ex) {
       <div class="stat-date">${esc(fmtDateLong(date))}</div>
     </div>`;
 
-  const repRows = [...repRecords.keys()].sort((a, b) => a - b).map(r => {
-    const s = repRecords.get(r);
+  const repRows = [...bestByReps.keys()].sort((a, b) => a - b).map(r => {
+    const s = bestByReps.get(r);
     return `<tr><td>${r}</td><td>${fmtWeight(s.weight)} ${getUnit()}</td><td class="rec-date">${esc(s.date)}</td></tr>`;
   }).join('');
 
