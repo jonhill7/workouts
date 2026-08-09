@@ -55,6 +55,14 @@ any prior CSV import), per-exercise notes, and routines.
 - **PR detection**: 🏆 marks any set that beats your previous best weight at
   the same or higher reps (longest distance/duration for cardio), with a
   toast the moment you log one
+- **Guided courses**: three preloaded multi-week home programs (🌱 *Fresh
+  Start*, 4 weeks; 🔥 *Momentum*, 6 weeks; ⚡ *Unstoppable*, 8 weeks — no
+  equipment, reps ramp up weekly). Open a course from the Routines screen,
+  tap **Continue**, and today's workout is a checklist: every exercise with
+  its sets × reps laid out, one tap-to-check circle per set. Checked sets are
+  logged as normal history (rest timer runs between them), a day is marked
+  complete when all its circles are green, and course progress shows as a
+  per-week grid of days
 - **Routines**: ordered exercise lists (📋 on the log screen), each exercise
   with a target set count (editable via its ×N chip; FitNotes backups import
   their template set counts). The routine screen shows today's progress bar
@@ -108,6 +116,7 @@ avoids, so backups are one tap instead:
 node tests/importer.test.mjs        # unit tests for the CSV import logic
 node tests/fitnotes-db.test.mjs     # unit tests for the .fitnotes SQLite parser
 node tests/streaks.test.mjs         # unit tests for routine completion/streaks
+node tests/courses.test.mjs         # unit tests for the guided-course plans
 python3 -m http.server -d app 8000  # run locally at http://localhost:8000
 ```
 

@@ -2,7 +2,7 @@
 // Bump VERSION on every release — deploys are picked up on next visit
 // (an "Update ready" toast offers an immediate reload).
 
-const VERSION = 'v1.7.1';
+const VERSION = 'v1.8.0';
 const CACHE = `workout-log-${VERSION}`;
 
 const ASSETS = [
@@ -18,6 +18,7 @@ const ASSETS = [
   './js/exporter.js',
   './js/charts.js',
   './js/streaks.js',
+  './js/courses.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',
