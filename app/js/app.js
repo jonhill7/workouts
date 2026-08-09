@@ -11,8 +11,12 @@ import {
   routineStats, routineItems, dayProgress, glowLevel,
   MAX_GAP_DAYS, DEFAULT_SETS, PARTIAL_THRESHOLD,
 } from './streaks.js';
+import {
+  PROGRAMS, COURSE_EXERCISES, programById, courseById,
+  dayLabel, daySetCount, blockTarget, nextDayIndex,
+} from './courses.js';
 
-export const APP_VERSION = '1.7.1';
+export const APP_VERSION = '1.9.0';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
@@ -1443,6 +1447,30 @@ async function renderRoutines() {
   $app().innerHTML = `
     ${header({ title: 'Routines', showBack: true })}
     <main class="content">
+      <div class="settings-section">Classes</div>
+      ${PROGRAMS.map(p => {
+        // Surface the furthest-along level with any progress on the class row.
+        const active = [...p.levels].reverse().find(c => Object.keys(courseProgress(c.id).days).length);
+        let status = esc(p.tagline);
+        if (active) {
+          const prog = courseProgress(active.id);
+          const next = nextDayIndex(active, prog.days);
+          status = next === -1
+            ? `🏆 ${esc(active.name)} complete!`
+            : `${esc(active.name)}: ${Object.keys(prog.days).length} of ${active.days.length} workouts done`;
+        }
+        return `
+        <div class="list-row course-row" data-program="${p.id}">
+          <span class="course-emoji">${p.emoji}</span>
+          <div class="row-label">
+            <div>${esc(p.name)}<span class="row-sub">3 levels · ${p.levels[0].weeks}–${p.levels[2].weeks} weeks</span></div>
+            <div class="row-stats">${status}</div>
+          </div>
+          <span class="row-chevron">›</span>
+        </div>`;
+      }).join('')}
+      <p class="setting-note">Classes are ready-made plans in three difficulty levels: pick one, do today's workout, check off each set. No planning needed.</p>
+      <div class="settings-section">My routines</div>
       <button class="btn btn-ghost btn-block" id="new-routine">＋ New routine</button>
       ${routines.map(r => {
         const { items, stats: st } = infoById.get(r.id);
@@ -1464,6 +1492,10 @@ async function renderRoutines() {
     </main>`;
   const root = $app();
   wireHeader(root);
+  root.querySelectorAll('[data-program]').forEach(row => row.onclick = () => {
+    const id = row.dataset.program;
+    pushView(() => renderProgram(id));
+  });
   root.querySelector('#new-routine').onclick = () => routineEditor(null);
   root.querySelectorAll('[data-routine]').forEach(row => row.onclick = e => {
     if (e.target.closest('[data-editroutine]')) return;
@@ -1604,6 +1636,259 @@ async function renderRoutine(routineId) {
   root.querySelectorAll('[data-remove]').forEach(b => b.onclick = async () => {
     items.splice(parseInt(b.dataset.remove, 10), 1);
     await db.put('routines', routine);
+    rerender();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Guided courses — preloaded multi-week programs (data in courses.js). Every
+// day is a checklist: tap a set circle and a normal set record is written, so
+// history, PRs and the calendar all see course workouts like any other.
+// Progress lives in the courseProgress setting:
+//   { [courseId]: { startedAt: 'YYYY-MM-DD'|null, days: { [dayIdx]: date } } }
+
+function courseProgress(courseId) {
+  const p = (S.courseProgress || {})[courseId];
+  return { startedAt: p?.startedAt || null, days: { ...(p?.days || {}) } };
+}
+
+async function saveCourseProgress(courseId, prog) {
+  await setSetting('courseProgress', { ...(S.courseProgress || {}), [courseId]: prog });
+}
+
+// Map block exercise names to store records, creating any that don't exist
+// yet (matched case-insensitively, so seed exercises like Push Up are reused).
+async function ensureCourseExercises(course) {
+  const [cats, exercises] = await Promise.all([db.getAll('categories'), db.getAll('exercises')]);
+  const catByName = new Map(cats.map(c => [c.nameLower, c]));
+  const exByName = new Map(exercises.map(e => [e.nameLower, e]));
+  const out = new Map();
+  for (const day of course.days) {
+    for (const b of day.blocks) {
+      if (out.has(b.name)) continue;
+      let ex = exByName.get(b.name.toLowerCase());
+      if (!ex) {
+        const spec = COURSE_EXERCISES[b.name];
+        let cat = catByName.get(spec.category.toLowerCase());
+        if (!cat) {
+          cat = { name: spec.category, nameLower: spec.category.toLowerCase(), sort: 100 + catByName.size };
+          cat.id = await db.put('categories', cat);
+          catByName.set(cat.nameLower, cat);
+        }
+        ex = spec.timed
+          ? { name: b.name, nameLower: b.name.toLowerCase(), categoryId: cat.id, type: 'level_time', levelKind: 'set' }
+          : { name: b.name, nameLower: b.name.toLowerCase(), categoryId: cat.id, type: 'weight_reps' };
+        ex.id = await db.put('exercises', ex);
+        exByName.set(ex.nameLower, ex);
+      }
+      out.set(b.name, ex);
+    }
+  }
+  return out;
+}
+
+// Checking a set writes it as a regular record: bodyweight reps for rep
+// blocks, a timed hold (level = set number) for `seconds` blocks.
+function courseSetRecord(block, ex, setIndex, date) {
+  return {
+    exerciseId: ex.id, date, seq: nextSeq(),
+    weight: 0,
+    reps: block.seconds ? 0 : block.reps,
+    distance: 0,
+    time: block.seconds || 0,
+    level: block.seconds ? setIndex + 1 : 0,
+    comment: '',
+  };
+}
+
+async function renderProgram(programId) {
+  const p = programById(programId);
+  if (!p) { back(); return; }
+  $app().innerHTML = `
+    ${header({ title: esc(p.name), showBack: true })}
+    <main class="content">
+      <div class="course-hero">
+        <div class="course-hero-emoji">${p.emoji}</div>
+        <div class="course-tagline">${esc(p.tagline)}</div>
+        <div class="course-desc">${esc(p.description)}</div>
+      </div>
+      <div class="settings-section">Pick your level</div>
+      ${p.levels.map(c => {
+        const prog = courseProgress(c.id);
+        const doneCount = Object.keys(prog.days).length;
+        const next = nextDayIndex(c, prog.days);
+        const status = !doneCount
+          ? esc(c.tagline)
+          : next === -1
+            ? '🏆 Complete!'
+            : `${doneCount} of ${c.days.length} workouts done · next up: ${dayLabel(c, next)}`;
+        return `
+        <div class="list-row course-row" data-level="${c.id}">
+          <span class="level-badge level-${c.level}">${c.level}</span>
+          <div class="row-label">
+            <div>${esc(c.name)}<span class="row-sub">${esc(c.levelLabel)} · ${c.weeks} weeks · ${c.daysPerWeek}×/week · ${c.minutes} min</span></div>
+            <div class="row-stats">${status}</div>
+          </div>
+          <span class="row-chevron">›</span>
+        </div>`;
+      }).join('')}
+      <p class="setting-note">Haven't worked out in a while? Level 1 is the right place to start — every level ramps up week by week.</p>
+    </main>`;
+  const root = $app();
+  wireHeader(root);
+  root.querySelectorAll('[data-level]').forEach(row => row.onclick = () => {
+    const id = row.dataset.level;
+    pushView(() => renderCourse(id));
+  });
+}
+
+async function renderCourse(courseId) {
+  const course = courseById(courseId);
+  if (!course) { back(); return; }
+  const prog = courseProgress(courseId);
+  const doneCount = Object.keys(prog.days).length;
+  const next = nextDayIndex(course, prog.days);
+
+  const weeksHtml = [];
+  for (let w = 0; w < course.weeks; w++) {
+    const chips = [];
+    for (let d = 0; d < course.daysPerWeek; d++) {
+      const idx = w * course.daysPerWeek + d;
+      const done = !!prog.days[idx];
+      chips.push(`
+        <button class="course-day-chip ${done ? 'chip-done' : idx === next ? 'chip-next' : ''}"
+          data-day="${idx}" title="${esc(course.days[idx].title)}${done ? ` — done ${prog.days[idx]}` : ''}">
+          ${done ? '✓' : d + 1}
+        </button>`);
+    }
+    weeksHtml.push(`
+      <div class="course-week">
+        <span class="course-week-label">Week ${w + 1}</span>
+        <div class="course-week-days">${chips.join('')}</div>
+      </div>`);
+  }
+
+  $app().innerHTML = `
+    ${header({ title: esc(course.name), showBack: true })}
+    <main class="content">
+      <div class="course-hero">
+        <div class="course-hero-emoji">${course.emoji}</div>
+        <div class="course-tagline">${esc(course.tagline)}</div>
+        <div class="course-desc">${esc(course.description)}</div>
+        <div class="course-meta">${esc(course.levelLabel)} level · ${course.weeks} weeks · ${course.daysPerWeek} workouts a week · about ${course.minutes} minutes each · no equipment</div>
+      </div>
+      ${next === -1
+        ? `<div class="day-done-banner">🏆 Course complete — all ${course.days.length} workouts. Amazing!</div>`
+        : `<button class="btn btn-primary btn-block course-cta" id="course-go">
+             ${doneCount ? 'Continue' : 'Start'}: ${dayLabel(course, next)} — ${esc(course.days[next].title)}
+           </button>`}
+      ${weeksHtml.join('')}
+      ${doneCount ? '<button class="btn btn-ghost btn-block course-cta" id="course-reset">Start over from week 1</button>' : ''}
+      <p class="setting-note">Tap any day to see or redo it. A day is checked off when you finish all its sets.</p>
+    </main>`;
+
+  const root = $app();
+  wireHeader(root);
+  root.querySelector('#course-go')?.addEventListener('click', () =>
+    pushView(() => renderCourseDay(courseId, next)));
+  root.querySelectorAll('[data-day]').forEach(b => b.onclick = () => {
+    const idx = parseInt(b.dataset.day, 10);
+    pushView(() => renderCourseDay(courseId, idx));
+  });
+  root.querySelector('#course-reset')?.addEventListener('click', async () => {
+    const ok = await confirmDialog({
+      title: 'Start over?',
+      body: 'Course progress resets to week 1. Your logged workouts stay in the history.',
+      okLabel: 'Start over', danger: true,
+    });
+    if (!ok) return;
+    await saveCourseProgress(courseId, { startedAt: null, days: {} });
+    rerender();
+  });
+}
+
+async function renderCourseDay(courseId, dayIdx) {
+  const course = courseById(courseId);
+  const day = course?.days[dayIdx];
+  if (!day) { back(); return; }
+  const prog = courseProgress(courseId);
+  const exByName = await ensureCourseExercises(course);
+  const daySets = await setsForDate(state.date);
+
+  // Check-off state is derived from today's logged sets, so it survives
+  // re-renders, app restarts and edits made elsewhere in the app.
+  const setsFor = b => daySets
+    .filter(s => s.exerciseId === exByName.get(b.name).id)
+    .sort((a, x) => (a.seq ?? 0) - (x.seq ?? 0));
+  const countFor = b => Math.min(setsFor(b).length, b.sets);
+  const done = day.blocks.reduce((a, b) => a + countFor(b), 0);
+  const want = daySetCount(day);
+  const complete = done >= want;
+
+  if (complete && !prog.days[dayIdx]) {
+    prog.days[dayIdx] = state.date;
+    if (!prog.startedAt) prog.startedAt = state.date;
+    await saveCourseProgress(courseId, prog);
+  }
+
+  $app().innerHTML = `
+    ${header({ title: esc(course.name), showBack: true })}
+    <main class="content">
+      <div class="course-day-head">
+        <div class="course-day-title">${dayLabel(course, dayIdx)} — ${esc(day.title)}</div>
+        <div class="rt-progress">
+          <div class="rt-bar"><div class="rt-bar-fill ${complete ? 'rt-fill-full' : ''}" style="width:${want ? Math.round(done / want * 100) : 0}%"></div></div>
+          <span class="rt-progress-label">${done}/${want} sets${complete ? ' ✓' : ''}</span>
+        </div>
+      </div>
+      <div class="course-note">🔆 ${esc(course.warmup)}</div>
+      ${day.blocks.map((b, bi) => {
+        const n = countFor(b);
+        return `
+        <div class="course-block">
+          <div class="course-block-head">
+            <span class="course-block-name">${esc(b.name)}</span>
+            <span class="course-target">${blockTarget(b)}</span>
+          </div>
+          ${b.tip ? `<div class="course-tip">${esc(b.tip)}</div>` : ''}
+          <div class="course-sets">
+            ${Array.from({ length: b.sets }, (_, k) => `
+              <button class="set-circle ${k < n ? 'set-circle-done' : ''}" data-check="${bi}:${k}"
+                aria-label="${esc(b.name)} set ${k + 1}${k < n ? ' done' : ''}">${k < n ? '✓' : k + 1}</button>`).join('')}
+          </div>
+        </div>`;
+      }).join('')}
+      <div class="course-note">🧘 ${esc(course.cooldown)}</div>
+      ${complete ? `
+        <div class="day-done-banner">🎉 ${dayLabel(course, dayIdx)} done — you showed up and did the thing!</div>
+        <button class="btn btn-primary btn-block course-cta" id="day-back">Back to ${esc(course.name)}</button>` : ''}
+    </main>`;
+
+  const root = $app();
+  wireHeader(root);
+  root.querySelector('#day-back')?.addEventListener('click', back);
+  root.querySelectorAll('[data-check]').forEach(btn => btn.onclick = async () => {
+    const [bi, k] = btn.dataset.check.split(':').map(Number);
+    const b = day.blocks[bi];
+    const ex = exByName.get(b.name);
+    const logged = setsFor(b);
+    const n = countFor(b);
+    if (k < n) {
+      // Un-check back down to k sets (removes anything logged beyond it too).
+      await db.bulkDelete('sets', logged.slice(k).map(s => s.id));
+    } else {
+      const recs = [];
+      for (let i = n; i <= k; i++) recs.push(courseSetRecord(b, ex, i, state.date));
+      await db.bulkPut('sets', recs);
+      if (!prog.startedAt) await saveCourseProgress(courseId, { ...prog, startedAt: state.date });
+      const nowDone = done - n + Math.max(n, k + 1);
+      if (nowDone >= want) {
+        restTimer.stop();
+        toast(`🎉 ${dayLabel(course, dayIdx)} done — great work!`);
+      } else {
+        restTimer.start(course.rest || S.restSeconds);
+      }
+    }
     rerender();
   });
 }
@@ -1860,7 +2145,7 @@ async function handleJSONRestore(file) {
   await db.bulkPut('sets', data.sets);
   await db.bulkPut('routines', data.routines || []);
   if (data.settings) {
-    for (const k of ['unit', 'weightIncrement', 'restSeconds', 'autoBackup']) {
+    for (const k of ['unit', 'weightIncrement', 'restSeconds', 'autoBackup', 'courseProgress']) {
       if (data.settings[k] !== undefined) await setSetting(k, data.settings[k]);
     }
   }
@@ -1962,6 +2247,7 @@ async function renderSettings() {
     await db.clearStore('exercises');
     await db.clearStore('categories');
     await db.clearStore('routines');
+    await setSetting('courseProgress', {});
     await setSetting('seeded', false);
     await seedIfNeeded();
     toast('All data deleted');
