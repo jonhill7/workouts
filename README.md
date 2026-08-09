@@ -64,7 +64,12 @@ any prior CSV import), per-exercise notes, and routines.
   exercise with its sets × reps laid out, one tap-to-check circle per set.
   Checked sets are logged as normal history (rest timer runs between them),
   a day is marked complete when all its circles are green, and course
-  progress shows as a per-week grid of days
+  progress shows as a per-week grid of days. Classes are officially started
+  ("Start this class") and finished: the current class is pinned to the
+  workout-log screen with its next workout, weekly count (e.g. 2 of 3 this
+  week) and a streak flame (same momentum rules as routines); finishing the
+  last day completes the class, and "Take a break" unpins it while keeping
+  progress for a later rejoin
 - **Routines**: ordered exercise lists (📋 on the log screen), each exercise
   with a target set count (editable via its ×N chip; FitNotes backups import
   their template set counts). The routine screen shows today's progress bar

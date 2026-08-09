@@ -11,6 +11,8 @@
 // level is the set number). Exercises are matched to the store by name and
 // created on demand from COURSE_EXERCISES.
 
+import { currentStreak } from './streaks.js';
+
 export const COURSE_EXERCISES = {
   // legs
   'Chair Squat': { category: 'Legs' },
@@ -823,4 +825,29 @@ export function nextDayIndex(course, doneDays) {
     if (!doneDays || !doneDays[i]) return i;
   }
   return -1;
+}
+
+export function programOfCourse(courseId) {
+  return PROGRAMS.find(p => p.levels.some(c => c.id === courseId)) || null;
+}
+
+// Completion dates ascending. Duplicates are kept on purpose: two workouts
+// finished on the same day are two completions, matching routine streaks.
+export function courseDoneDates(doneDays) {
+  return Object.values(doneDays || {}).sort();
+}
+
+// Momentum: length of the completion chain ending near `today`, using the
+// same gap rule as routine streaks (dead after MAX_GAP_DAYS without one).
+export function courseStreak(doneDays, today) {
+  return currentStreak(courseDoneDates(doneDays), today);
+}
+
+// Workouts completed in the calendar week (Mon–Sun) containing `today` —
+// shown against the course's days-per-week target.
+export function weekCount(doneDays, today) {
+  const d = new Date(today + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() - (d.getUTCDay() + 6) % 7);
+  const monday = d.toISOString().slice(0, 10);
+  return courseDoneDates(doneDays).filter(x => x >= monday && x <= today).length;
 }
