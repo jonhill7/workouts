@@ -474,6 +474,16 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .course-row .course-emoji { font-size: 24px; width: 36px; text-align: center; flex: none; }
 .row-chevron { color: var(--muted); font-size: 22px; flex: none; padding: 0 4px; }
 
+/* difficulty badge: 1 green / 2 amber / 3 red, like ski-slope ratings */
+.level-badge {
+  width: 30px; height: 30px; border-radius: 50%; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  margin: 0 3px; color: #fff; font-size: 14px; font-weight: 700;
+}
+.level-1 { background: #0ca30c; }
+.level-2 { background: #fab219; }
+.level-3 { background: #d3452e; }
+
 .course-hero {
   background: var(--surface); border-bottom: 1px solid var(--hairline);
   padding: 16px; margin-bottom: 12px;

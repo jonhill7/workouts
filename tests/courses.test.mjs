@@ -1,7 +1,8 @@
 // Unit tests for the guided-course definitions and helpers.
 import assert from 'node:assert/strict';
 import {
-  COURSES, COURSE_EXERCISES, courseById, dayLabel, daySetCount, blockTarget, nextDayIndex,
+  PROGRAMS, COURSES, COURSE_EXERCISES, programById, courseById,
+  dayLabel, daySetCount, blockTarget, nextDayIndex,
 } from '../app/js/courses.js';
 
 let passed = 0;
@@ -12,6 +13,33 @@ test('course ids are unique and lookup works', () => {
   assert.equal(new Set(ids).size, ids.length);
   for (const c of COURSES) assert.equal(courseById(c.id), c);
   assert.equal(courseById('nope'), null);
+});
+
+test('programs each offer three ordered difficulty levels', () => {
+  assert.ok(PROGRAMS.length >= 5);
+  const pids = PROGRAMS.map(p => p.id);
+  assert.equal(new Set(pids).size, pids.length);
+  for (const p of PROGRAMS) {
+    assert.equal(programById(p.id), p);
+    assert.ok(p.name && p.emoji && p.tagline && p.description, p.id);
+    assert.equal(p.levels.length, 3, `${p.id} has 3 levels`);
+    p.levels.forEach((c, i) => {
+      assert.equal(c.level, i + 1, `${c.id} level number`);
+      assert.equal(c.levelLabel, ['Beginner', 'Intermediate', 'Advanced'][i], c.id);
+    });
+    for (let i = 1; i < 3; i++) {
+      assert.ok(p.levels[i].weeks >= p.levels[i - 1].weeks, `${p.id} levels get longer`);
+    }
+  }
+  assert.equal(programById('nope'), null);
+});
+
+test('original course ids survive the program restructure (progress compat)', () => {
+  for (const id of ['fresh-start', 'momentum', 'unstoppable']) {
+    assert.ok(courseById(id), id);
+  }
+  assert.deepEqual(programById('total-body').levels.map(c => c.id),
+    ['fresh-start', 'momentum', 'unstoppable']);
 });
 
 test('every course expands to weeks × daysPerWeek days', () => {

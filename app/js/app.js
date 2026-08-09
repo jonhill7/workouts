@@ -12,10 +12,11 @@ import {
   MAX_GAP_DAYS, DEFAULT_SETS, PARTIAL_THRESHOLD,
 } from './streaks.js';
 import {
-  COURSES, COURSE_EXERCISES, courseById, dayLabel, daySetCount, blockTarget, nextDayIndex,
+  PROGRAMS, COURSE_EXERCISES, programById, courseById,
+  dayLabel, daySetCount, blockTarget, nextDayIndex,
 } from './courses.js';
 
-export const APP_VERSION = '1.8.0';
+export const APP_VERSION = '1.9.0';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
@@ -1446,27 +1447,29 @@ async function renderRoutines() {
   $app().innerHTML = `
     ${header({ title: 'Routines', showBack: true })}
     <main class="content">
-      <div class="settings-section">Guided courses</div>
-      ${COURSES.map(c => {
-        const prog = courseProgress(c.id);
-        const doneCount = Object.keys(prog.days).length;
-        const next = nextDayIndex(c, prog.days);
-        const status = !doneCount
-          ? esc(c.tagline)
-          : next === -1
-            ? '🏆 Course complete!'
-            : `${doneCount} of ${c.days.length} workouts done · next up: ${dayLabel(c, next)}`;
+      <div class="settings-section">Classes</div>
+      ${PROGRAMS.map(p => {
+        // Surface the furthest-along level with any progress on the class row.
+        const active = [...p.levels].reverse().find(c => Object.keys(courseProgress(c.id).days).length);
+        let status = esc(p.tagline);
+        if (active) {
+          const prog = courseProgress(active.id);
+          const next = nextDayIndex(active, prog.days);
+          status = next === -1
+            ? `🏆 ${esc(active.name)} complete!`
+            : `${esc(active.name)}: ${Object.keys(prog.days).length} of ${active.days.length} workouts done`;
+        }
         return `
-        <div class="list-row course-row" data-course="${c.id}">
-          <span class="course-emoji">${c.emoji}</span>
+        <div class="list-row course-row" data-program="${p.id}">
+          <span class="course-emoji">${p.emoji}</span>
           <div class="row-label">
-            <div>${esc(c.name)}<span class="row-sub">${c.weeks} weeks · ${c.daysPerWeek}×/week · ${c.minutes} min</span></div>
+            <div>${esc(p.name)}<span class="row-sub">3 levels · ${p.levels[0].weeks}–${p.levels[2].weeks} weeks</span></div>
             <div class="row-stats">${status}</div>
           </div>
           <span class="row-chevron">›</span>
         </div>`;
       }).join('')}
-      <p class="setting-note">Courses are ready-made plans: open one, do today's workout, check off each set. No planning needed.</p>
+      <p class="setting-note">Classes are ready-made plans in three difficulty levels: pick one, do today's workout, check off each set. No planning needed.</p>
       <div class="settings-section">My routines</div>
       <button class="btn btn-ghost btn-block" id="new-routine">＋ New routine</button>
       ${routines.map(r => {
@@ -1489,9 +1492,9 @@ async function renderRoutines() {
     </main>`;
   const root = $app();
   wireHeader(root);
-  root.querySelectorAll('[data-course]').forEach(row => row.onclick = () => {
-    const id = row.dataset.course;
-    pushView(() => renderCourse(id));
+  root.querySelectorAll('[data-program]').forEach(row => row.onclick = () => {
+    const id = row.dataset.program;
+    pushView(() => renderProgram(id));
   });
   root.querySelector('#new-routine').onclick = () => routineEditor(null);
   root.querySelectorAll('[data-routine]').forEach(row => row.onclick = e => {
@@ -1698,6 +1701,47 @@ function courseSetRecord(block, ex, setIndex, date) {
   };
 }
 
+async function renderProgram(programId) {
+  const p = programById(programId);
+  if (!p) { back(); return; }
+  $app().innerHTML = `
+    ${header({ title: esc(p.name), showBack: true })}
+    <main class="content">
+      <div class="course-hero">
+        <div class="course-hero-emoji">${p.emoji}</div>
+        <div class="course-tagline">${esc(p.tagline)}</div>
+        <div class="course-desc">${esc(p.description)}</div>
+      </div>
+      <div class="settings-section">Pick your level</div>
+      ${p.levels.map(c => {
+        const prog = courseProgress(c.id);
+        const doneCount = Object.keys(prog.days).length;
+        const next = nextDayIndex(c, prog.days);
+        const status = !doneCount
+          ? esc(c.tagline)
+          : next === -1
+            ? '🏆 Complete!'
+            : `${doneCount} of ${c.days.length} workouts done · next up: ${dayLabel(c, next)}`;
+        return `
+        <div class="list-row course-row" data-level="${c.id}">
+          <span class="level-badge level-${c.level}">${c.level}</span>
+          <div class="row-label">
+            <div>${esc(c.name)}<span class="row-sub">${esc(c.levelLabel)} · ${c.weeks} weeks · ${c.daysPerWeek}×/week · ${c.minutes} min</span></div>
+            <div class="row-stats">${status}</div>
+          </div>
+          <span class="row-chevron">›</span>
+        </div>`;
+      }).join('')}
+      <p class="setting-note">Haven't worked out in a while? Level 1 is the right place to start — every level ramps up week by week.</p>
+    </main>`;
+  const root = $app();
+  wireHeader(root);
+  root.querySelectorAll('[data-level]').forEach(row => row.onclick = () => {
+    const id = row.dataset.level;
+    pushView(() => renderCourse(id));
+  });
+}
+
 async function renderCourse(courseId) {
   const course = courseById(courseId);
   if (!course) { back(); return; }
@@ -1731,7 +1775,7 @@ async function renderCourse(courseId) {
         <div class="course-hero-emoji">${course.emoji}</div>
         <div class="course-tagline">${esc(course.tagline)}</div>
         <div class="course-desc">${esc(course.description)}</div>
-        <div class="course-meta">${course.weeks} weeks · ${course.daysPerWeek} workouts a week · about ${course.minutes} minutes each · no equipment</div>
+        <div class="course-meta">${esc(course.levelLabel)} level · ${course.weeks} weeks · ${course.daysPerWeek} workouts a week · about ${course.minutes} minutes each · no equipment</div>
       </div>
       ${next === -1
         ? `<div class="day-done-banner">🏆 Course complete — all ${course.days.length} workouts. Amazing!</div>`
