@@ -47,8 +47,9 @@ any prior CSV import), per-exercise notes, and routines.
 ## Features
 
 - Daily workout log with date navigation and a calendar (workout days get a
-  dot sized by set count); log weight×reps or distance/time (cardio) sets
-  with comments
+  dot sized by effort — sets count 1 each, timed/cardio sets count by
+  duration at ~6 min per set); log weight×reps or distance/time (cardio)
+  sets with comments
 - Exercise catalog grouped by category, search, custom exercises/categories,
   per-exercise notes (setup, seat height…), workout-count + recency stats,
   and A–Z / Recent / Most-used sorting
