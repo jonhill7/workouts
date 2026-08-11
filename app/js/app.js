@@ -16,7 +16,7 @@ import {
   dayLabel, daySetCount, blockTarget, nextDayIndex, courseStreak, weekCount,
 } from './courses.js';
 
-export const APP_VERSION = '1.10.0';
+export const APP_VERSION = '1.11.0';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
