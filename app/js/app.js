@@ -485,12 +485,28 @@ async function renderHome() {
 }
 
 // ---------------------------------------------------------------------------
-// Calendar — workout days get a dot, sized by how many sets were logged.
+// Calendar — workout days get a dot, sized by effort. Strength sets count 1
+// each; timed sets (cardio, holds) count by duration at ~6 min per
+// set-equivalent, so a 30-minute ride shades like a 5-set session. Every
+// logged set still counts at least 1 so short holds aren't penalized.
+
+const CAL_SECONDS_PER_SET = 360;
 
 async function openCalendar() {
-  const sets = await db.getAll('sets');
-  const counts = new Map();
-  for (const s of sets) counts.set(s.date, (counts.get(s.date) || 0) + 1);
+  const [sets, exercises] = await Promise.all([db.getAll('sets'), db.getAll('exercises')]);
+  const timedExIds = new Set(exercises.filter(e => typeUsesTime(e.type)).map(e => e.id));
+  const days = new Map(); // date → { score, sets, timedSec }
+  for (const s of sets) {
+    const d = days.get(s.date) || { score: 0, sets: 0, timedSec: 0 };
+    if (timedExIds.has(s.exerciseId) && s.time > 0) {
+      d.score += Math.max(1, s.time / CAL_SECONDS_PER_SET);
+      d.timedSec += s.time;
+    } else {
+      d.score += 1;
+    }
+    d.sets += 1;
+    days.set(s.date, d);
+  }
 
   let view = state.date.slice(0, 7); // 'YYYY-MM'
   const { el, close } = openModal('<div id="cal-root"></div>');
@@ -505,12 +521,16 @@ async function openCalendar() {
     for (let i = 0; i < startDow; i++) cells += '<span class="cal-cell"></span>';
     for (let d = 1; d <= daysInMonth; d++) {
       const ds = `${y}-${p(m)}-${p(d)}`;
-      const n = counts.get(ds) || 0;
-      // GitHub-style intensity: shade the cell by how many sets were logged
+      const day = days.get(ds);
+      const n = day ? day.score : 0;
+      // GitHub-style intensity: shade the cell by the day's effort score
       const tier = n === 0 ? 0 : n < 5 ? 1 : n < 10 ? 2 : n < 20 ? 3 : 4;
+      const title = day
+        ? `${day.sets} set${day.sets === 1 ? '' : 's'}${day.timedSec ? ` · ${Math.round(day.timedSec / 60)} min timed` : ''}`
+        : '';
       cells += `
         <button class="cal-cell cal-day${tier ? ` cal-h${tier}` : ''}${ds === state.date ? ' cal-selected' : ''}${ds === todayStr() ? ' cal-today' : ''}"
-          data-date="${ds}" ${n ? `title="${n} sets"` : ''}>
+          data-date="${ds}" ${title ? `title="${title}"` : ''}>
           <span class="cal-num">${d}</span>
         </button>`;
     }
@@ -525,7 +545,7 @@ async function openCalendar() {
         ${cells}
       </div>
       <div class="cal-legend">
-        Fewer sets
+        Less
         <span class="cal-swatch cal-h1"></span><span class="cal-swatch cal-h2"></span><span class="cal-swatch cal-h3"></span><span class="cal-swatch cal-h4"></span>
         More
       </div>`;
