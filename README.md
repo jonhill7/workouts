@@ -84,7 +84,8 @@ any prior CSV import), per-exercise notes, and routines.
   grows (up to a 50-streak)
 - Per-exercise **History**, **Graph** (max weight, est. 1RM, volume, reps —
   or distance/time/pace for cardio; 3M/6M/1Y/All ranges), and **Records**
-  (PRs, rep records table)
+  (PRs, rep records table — a set counts toward its own rep count and every
+  lower one, so 100 × 10 also sets your 9-rep record to at least 100)
 - **Set-number / resistance-level tracking**: two extra exercise types log a
   unit-less integer **level** alongside reps or time — "Set/Level × Reps" for
   bodyweight work tracked by set number (max reps on your 1st set, 2nd set…)

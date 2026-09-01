@@ -37,7 +37,32 @@ test('rep records include high-rep sets (no 12-rep cap)', () => {
   assert.deepEqual([...recs.keys()].sort((a, b) => a - b), [10, 15, 20]);
   assert.equal(recs.get(15).weight, 47.5);
   assert.equal(recs.get(20).weight, 45);
-  assert.equal(recs.get(10).date, '2024-12-18');
+  // The 15-rep 47.5 set proves 47.5 × 10 too, so it owns the 10-rep row.
+  assert.equal(recs.get(10).weight, 47.5);
+  assert.equal(recs.get(10).date, '2024-12-11');
+});
+
+test('a heavier set at more reps counts toward lower rep counts', () => {
+  const sets = [
+    set('2024-01-01', 90, 9),
+    set('2024-01-08', 100, 10), // 100×10 proves 100×9
+    set('2024-01-15', 120, 5),
+  ];
+  const recs = repRecords(sets);
+  assert.equal(recs.get(9).weight, 100);
+  assert.equal(recs.get(9).date, '2024-01-08');
+  assert.equal(recs.get(10).weight, 100);
+  assert.equal(recs.get(5).weight, 120); // fewer reps: 100×10 doesn't beat 120×5
+});
+
+test('cascaded records credit whichever set achieved the weight first', () => {
+  const sets = [
+    set('2024-01-01', 100, 9),  // 100 for ≥9 reps, first
+    set('2024-02-01', 100, 12), // same weight at more reps, later
+  ];
+  const recs = repRecords(sets);
+  assert.equal(recs.get(9).date, '2024-01-01');
+  assert.equal(recs.get(12).date, '2024-02-01');
 });
 
 test('every trophy set is reflected in the rep records table', () => {

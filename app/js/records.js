@@ -51,12 +51,32 @@ export function computePRIds(sortedSets, type) {
 // Best weight per rep count, for the Records tab. Every rep count ever logged
 // gets a row — a 15-rep or 50-rep best is as much a record as a 5-rep one,
 // and every set that earned a 🏆 in History must be reflected here.
+//
+// A set counts toward its own rep count and every lower one: 100 kg × 10
+// proves you can do 100 kg × 9, so the 9-rep row never shows less than the
+// 10-rep row. Ties go to whichever set achieved the weight first. This
+// implication is why only weight×reps has a rep-records table at all —
+// cardio has no rep dimension, and level types don't compare across levels
+// (a "level" may be a set number, where set 3 says nothing about set 1, or a
+// band whose numbering direction the app can't know).
 export function repRecords(sets) {
-  const best = new Map(); // reps -> best set
+  const exact = new Map(); // reps -> { s: earliest heaviest set at exactly reps, i: chrono index }
+  let i = 0;
   for (const s of sets) {
     if (!(s.reps >= 1)) continue;
-    const cur = best.get(s.reps);
-    if (!cur || s.weight > cur.weight) best.set(s.reps, s);
+    const cur = exact.get(s.reps);
+    if (!cur || s.weight > cur.s.weight) exact.set(s.reps, { s, i });
+    i++;
+  }
+  // Walk rep counts high→low, carrying the record down so each row holds the
+  // heaviest set done for that many reps or more.
+  const best = new Map(); // reps -> best set
+  let carry = null;
+  for (const r of [...exact.keys()].sort((a, b) => b - a)) {
+    const own = exact.get(r);
+    if (!carry || own.s.weight > carry.s.weight ||
+        (own.s.weight === carry.s.weight && own.i < carry.i)) carry = own;
+    best.set(r, carry.s);
   }
   return best;
 }
