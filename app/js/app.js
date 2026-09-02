@@ -1,6 +1,6 @@
 import * as db from './db.js';
 import {
-  KG_PER_LB, parseFitNotesCSV, setKey, inferType, timeToString, parseTimeToSeconds,
+  KG_PER_LB, parseFitNotesCSV, setKey, inferType, timeToString,
   LEVEL_TYPES, LEVEL_SOURCES, DEFAULT_LEVEL_SOURCE, levelFromSet, convertToLevel,
 } from './importer.js';
 import { loadSqlJs, looksLikeSQLite, parseFitNotesDB } from './fitnotes-db.js';
@@ -158,6 +158,18 @@ const typeUsesReps = t => t === 'weight_reps' || t === 'level_reps';
 const typeUsesTime = t => t === 'distance_time' || t === 'level_time';
 const levelNoun = ex => ex.levelKind === 'resistance' ? 'Level' : 'Set';
 const levelFieldTitle = ex => ex.levelKind === 'resistance' ? 'RESISTANCE LEVEL' : 'SET #';
+
+// Split seconds into the tracker's three time boxes; zero fields stay blank
+// so their 0 placeholder shows through.
+function timeParts(sec) {
+  sec = Math.max(0, Math.round(sec || 0));
+  if (!sec) return { timeH: '', timeM: '', timeS: '' };
+  return {
+    timeH: String(Math.floor(sec / 3600) || ''),
+    timeM: String(Math.floor((sec % 3600) / 60) || ''),
+    timeS: String(sec % 60 || ''),
+  };
+}
 
 // FitNotes shows sets as two columns: "185 lbs | 8 reps" (or distance | time).
 function describeCols(s, ex) {
@@ -1000,13 +1012,13 @@ async function renderTrackTab(body, ex) {
   let selectedId = draft.selectedId && daySets.some(s => s.id === draft.selectedId) ? draft.selectedId : null;
 
   // Prefill from: selected set > draft > last set today > last workout
-  let pre = { weight: '', reps: '', dist: '', time: '', level: '', comment: '' };
+  let pre = { weight: '', reps: '', dist: '', timeH: '', timeM: '', timeS: '', level: '', comment: '' };
   const fillFrom = s => {
     pre = {
       weight: s.weight > 0 ? fmtWeight(s.weight) : '',
       reps: s.reps > 0 ? String(s.reps) : '',
       dist: s.distance > 0 ? fmtNum(mToDisplayDist(s.distance)) : '',
-      time: s.time > 0 ? timeToString(s.time) : '',
+      ...timeParts(s.time),
       level: s.level > 0 ? String(s.level) : '',
       comment: s.comment || '',
     };
@@ -1071,10 +1083,16 @@ async function renderTrackTab(body, ex) {
       </div>` : ''}
     ${usesTime ? `
       <div class="field-block">
-        <div class="field-title">TIME (h:mm:ss)</div>
+        <div class="field-title">TIME (hrs : min : sec)</div>
         <div class="stepper">
           <button class="step-btn" data-timestep="-60">−</button>
-          <input type="text" inputmode="numeric" id="in-time" value="${esc(pre.time)}" placeholder="0:00">
+          <div class="time-parts">
+            <input type="number" inputmode="numeric" step="1" min="0" id="in-time-h" value="${esc(pre.timeH)}" placeholder="0" aria-label="Hours">
+            <span class="time-sep">:</span>
+            <input type="number" inputmode="numeric" step="1" min="0" id="in-time-m" value="${esc(pre.timeM)}" placeholder="0" aria-label="Minutes">
+            <span class="time-sep">:</span>
+            <input type="number" inputmode="numeric" step="1" min="0" id="in-time-s" value="${esc(pre.timeS)}" placeholder="0" aria-label="Seconds">
+          </div>
           <button class="step-btn" data-timestep="60">＋</button>
         </div>
       </div>` : ''}
@@ -1112,11 +1130,15 @@ async function renderTrackTab(body, ex) {
   };
 
   const val = id => body.querySelector(id)?.value ?? '';
+  const readTime = () =>
+    (parseInt(val('#in-time-h'), 10) || 0) * 3600 +
+    (parseInt(val('#in-time-m'), 10) || 0) * 60 +
+    (parseInt(val('#in-time-s'), 10) || 0);
   const readInputs = () => ({
     weight: parseFloat(val('#in-weight')) || 0,
     reps: parseInt(val('#in-reps'), 10) || 0,
     dist: parseFloat(val('#in-dist')) || 0,
-    time: parseTimeToSeconds(val('#in-time')),
+    time: readTime(),
     level: parseInt(val('#in-level'), 10) || 0,
     comment: val('#in-comment').trim(),
   });
@@ -1124,11 +1146,19 @@ async function renderTrackTab(body, ex) {
     trackDraft[ex.id] = {
       selectedId,
       weight: val('#in-weight'), reps: val('#in-reps'),
-      dist: val('#in-dist'), time: val('#in-time'),
+      dist: val('#in-dist'),
+      timeH: val('#in-time-h'), timeM: val('#in-time-m'), timeS: val('#in-time-s'),
       level: val('#in-level'), comment: val('#in-comment'),
     };
   };
   body.querySelectorAll('input').forEach(i => i.addEventListener('input', saveDraft));
+
+  // Numeric keypads can't easily clear a field first, so focusing a number
+  // box selects its whole value — typing simply replaces it.
+  ['#in-reps', '#in-time-h', '#in-time-m', '#in-time-s'].forEach(sel => {
+    const inp = body.querySelector(sel);
+    if (inp) inp.addEventListener('focus', () => setTimeout(() => inp.select(), 0));
+  });
 
   const stepTarget = { weight: '#in-weight', reps: '#in-reps', dist: '#in-dist', level: '#in-level' };
   body.querySelectorAll('[data-step]').forEach(b => b.onclick = () => {
@@ -1140,9 +1170,11 @@ async function renderTrackTab(body, ex) {
     saveDraft();
   });
   body.querySelectorAll('[data-timestep]').forEach(b => b.onclick = () => {
-    const input = body.querySelector('#in-time');
-    const next = Math.max(0, parseTimeToSeconds(input.value) + parseInt(b.dataset.timestep, 10));
-    input.value = timeToString(next);
+    const next = Math.max(0, readTime() + parseInt(b.dataset.timestep, 10));
+    const p = timeParts(next);
+    body.querySelector('#in-time-h').value = p.timeH;
+    body.querySelector('#in-time-m').value = p.timeM;
+    body.querySelector('#in-time-s').value = p.timeS;
     saveDraft();
   });
 
@@ -1193,7 +1225,7 @@ async function renderTrackTab(body, ex) {
     rerender();
   });
   body.querySelector('#btn-clear')?.addEventListener('click', () => {
-    trackDraft[ex.id] = { selectedId: null, weight: '', reps: '', dist: '', time: '', level: '', comment: '' };
+    trackDraft[ex.id] = { selectedId: null, weight: '', reps: '', dist: '', timeH: '', timeM: '', timeS: '', level: '', comment: '' };
     rerender();
   });
   body.querySelectorAll('[data-set]').forEach(row => row.onclick = () => {
@@ -1264,7 +1296,8 @@ const GRAPH_METRICS = {
   ],
   distance_time: [
     ['distance', 'Distance'],
-    ['time', 'Time'],
+    ['totalTime', 'Total Time'],
+    ['maxTime', 'Max Time'],
     ['pace', 'Pace'],
   ],
   level_reps: [
@@ -1273,7 +1306,8 @@ const GRAPH_METRICS = {
     ['maxLevel', 'Max Level'],
   ],
   level_time: [
-    ['time', 'Time'],
+    ['totalTime', 'Total Time'],
+    ['maxTime', 'Max Time'],
     ['maxLevel', 'Max Level'],
   ],
 };
@@ -1304,7 +1338,8 @@ async function renderGraphTab(body, ex) {
       case 'totalReps': return daySets.reduce((a, s) => a + s.reps, 0);
       case 'maxLevel': return Math.max(...daySets.map(s => s.level || 0));
       case 'distance': return daySets.reduce((a, s) => a + mToDisplayDist(s.distance), 0);
-      case 'time': return daySets.reduce((a, s) => a + s.time, 0) / 60; // minutes
+      case 'totalTime': return daySets.reduce((a, s) => a + s.time, 0) / 60; // minutes
+      case 'maxTime': return Math.max(...daySets.map(s => s.time)) / 60; // minutes
       case 'pace': {
         const dist = daySets.reduce((a, s) => a + mToDisplayDist(s.distance), 0);
         const time = daySets.reduce((a, s) => a + s.time, 0);
@@ -1321,7 +1356,7 @@ async function renderGraphTab(body, ex) {
   const unitFor = {
     maxWeight: getUnit(), e1rm: getUnit(), volume: getUnit(),
     maxReps: 'reps', totalReps: 'reps', maxLevel: '',
-    distance: distUnitLabel(), time: 'min', pace: `min/${distUnitLabel()}`,
+    distance: distUnitLabel(), totalTime: '', maxTime: '', pace: `min/${distUnitLabel()}`,
   }[pref.metric] || '';
 
   const rangeLabels = { '3m': '3 Months', '6m': '6 Months', '1y': '1 Year', all: 'All Time' };
@@ -1349,8 +1384,11 @@ async function renderGraphTab(body, ex) {
     pref.range = e.target.value;
     renderGraphTab(body, ex);
   };
+  const isTimeMetric = pref.metric === 'totalTime' || pref.metric === 'maxTime';
   renderLineChart(body.querySelector('#chart'), points, {
-    formatValue: v => fmtNum(v, pref.metric === 'pace' ? 1 : v >= 1000 ? 0 : 1),
+    formatValue: isTimeMetric
+      ? v => timeToString(v * 60)
+      : v => fmtNum(v, pref.metric === 'pace' ? 1 : v >= 1000 ? 0 : 1),
   });
 }
 
