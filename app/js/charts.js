@@ -54,15 +54,19 @@ export function renderLineChart(container, points, opts = {}) {
   const fmtV = opts.formatValue || (v => String(Math.round(v * 100) / 100));
   const W = Math.max(280, container.clientWidth || 320);
   const H = 230;
-  const M = { l: 46, r: 14, t: 14, b: 30 };
-  const iw = W - M.l - M.r;
-  const ih = H - M.t - M.b;
 
   const pts = points.map(p => ({ x: Date.parse(p.date + 'T00:00:00Z'), y: p.value }));
   let xMin = pts[0].x, xMax = pts[pts.length - 1].x;
   if (xMin === xMax) { xMin -= 43_200_000; xMax += 43_200_000; }
   const yVals = pts.map(p => p.y);
   const { lo, hi, ticks } = niceTicks(Math.min(...yVals), Math.max(...yVals), 4);
+
+  // Left margin grows with the widest tick label (~6.5px/char at 11px) so
+  // long values like "1:26:30" don't clip off the edge.
+  const maxTickChars = Math.max(...ticks.map(t => fmtV(t).length));
+  const M = { l: Math.max(46, 12 + maxTickChars * 6.5), r: 14, t: 14, b: 30 };
+  const iw = W - M.l - M.r;
+  const ih = H - M.t - M.b;
 
   const X = t => M.l + ((t - xMin) / (xMax - xMin)) * iw;
   const Y = v => M.t + ih - ((v - lo) / (hi - lo || 1)) * ih;

@@ -2,7 +2,7 @@
 // Bump VERSION on every release — deploys are picked up on next visit
 // (an "Update ready" toast offers an immediate reload).
 
-const VERSION = 'v1.11.1';
+const VERSION = 'v1.12.0';
 const CACHE = `workout-log-${VERSION}`;
 
 const ASSETS = [
