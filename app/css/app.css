@@ -21,6 +21,7 @@
   --selected-row: #bbdefb;
   --datebar: #f5f5f5;
   --chart-line: #1976d2;
+  --chart-trend: #ef6c00;     /* trailing-average curve — CVD-safe against the blue dots */
   --chart-grid: #e0e0e0;
 }
 
@@ -45,6 +46,7 @@
     --selected-row: #1a3a5c;
     --datebar: #1b1b1b;
     --chart-line: #64b5f6;
+    --chart-trend: #ffa726;
     --chart-grid: #333333;
   }
 }
@@ -295,12 +297,22 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   border: 1px solid var(--field-border); border-radius: 3px;
   padding: 9px 8px; font: inherit; font-size: 14px;
 }
+.trend-toggle {
+  display: inline-flex; align-items: center; gap: 7px;
+  margin-bottom: 12px; padding: 7px 12px;
+  font-size: 13px; color: var(--ink-2);
+  background: var(--field-bg);
+  border: 1px solid var(--field-border); border-radius: 999px;
+}
+.trend-swatch { width: 16px; height: 0; border-top: 2px dashed var(--muted); }
+.trend-toggle.trend-on { color: var(--ink); border-color: var(--chart-trend); }
+.trend-toggle.trend-on .trend-swatch { border-top: 3px solid var(--chart-trend); }
 .chart-title { font-size: 13px; font-weight: 500; color: var(--ink-2); margin: 2px 2px 6px; }
 .chart-box { position: relative; background: var(--surface); border: 1px solid var(--hairline); border-radius: 3px; padding: 6px 2px 2px; }
 .chart-empty { color: var(--muted); text-align: center; padding: 48px 16px; }
 .chart-grid { stroke: var(--chart-grid); stroke-width: 1; }
 .chart-tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.chart-line-path { fill: none; stroke: var(--chart-line); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart-trend-path { fill: none; stroke: var(--chart-trend); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .chart-dot { fill: var(--chart-line); }
 .chart-dot-hover { fill: var(--chart-line); stroke: var(--surface); stroke-width: 2; }
 .chart-cross { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
