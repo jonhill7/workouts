@@ -16,7 +16,7 @@ import {
   dayLabel, daySetCount, blockTarget, nextDayIndex, courseStreak, weekCount,
 } from './courses.js';
 
-export const APP_VERSION = '1.11.1';
+export const APP_VERSION = '1.13.0';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
@@ -1312,19 +1312,19 @@ const GRAPH_METRICS = {
   ],
 };
 const GRAPH_RANGES = [['3m', '3M', 91], ['6m', '6M', 182], ['1y', '1Y', 365], ['all', 'All', Infinity]];
-const graphPrefs = {}; // per-exercise metric/range selection
+const TREND_WINDOW_DAYS = 30;
+const graphPrefs = {}; // per-exercise metric/range/trend selection
 
 async function renderGraphTab(body, ex) {
   const metrics = GRAPH_METRICS[ex.type] || GRAPH_METRICS.weight_reps;
-  const pref = graphPrefs[ex.id] || (graphPrefs[ex.id] = { metric: metrics[0][0], range: 'all' });
+  const pref = graphPrefs[ex.id] || (graphPrefs[ex.id] = { metric: metrics[0][0], range: 'all', trend: false });
   const sets = await setsForExercise(ex.id);
 
   const rangeDays = GRAPH_RANGES.find(r => r[0] === pref.range)?.[2] ?? Infinity;
   const cutoff = Number.isFinite(rangeDays) ? addDays(todayStr(), -rangeDays) : '0000-00-00';
-  const filtered = sets.filter(s => s.date >= cutoff);
 
   const byDate = new Map();
-  for (const s of filtered) {
+  for (const s of sets) {
     if (!byDate.has(s.date)) byDate.set(s.date, []);
     byDate.get(s.date).push(s);
   }
@@ -1349,9 +1349,25 @@ async function renderGraphTab(body, ex) {
     }
   };
 
-  const points = [...byDate.keys()].sort()
+  // Aggregate the full history, then clip to the range for display — the
+  // trailing average needs the points just before the cutoff so the curve
+  // starts out right instead of averaging over a truncated window.
+  const allPoints = [...byDate.keys()].sort()
     .map(date => ({ date, value: agg(byDate.get(date), pref.metric) }))
     .filter(p => p.value > 0);
+  const points = allPoints.filter(p => p.date >= cutoff);
+
+  let trend = null;
+  if (pref.trend) {
+    const win = TREND_WINDOW_DAYS * 86_400_000;
+    const xs = allPoints.map(p => Date.parse(p.date + 'T00:00:00Z'));
+    let j = 0, sum = 0;
+    trend = allPoints.map((p, i) => {
+      sum += p.value;
+      while (xs[j] < xs[i] - win) { sum -= allPoints[j].value; j++; }
+      return { date: p.date, value: sum / (i - j + 1) };
+    }).filter(p => p.date >= cutoff);
+  }
 
   const unitFor = {
     maxWeight: getUnit(), e1rm: getUnit(), volume: getUnit(),
@@ -1372,6 +1388,9 @@ async function renderGraphTab(body, ex) {
             `<option value="${id}" ${pref.range === id ? 'selected' : ''}>${rangeLabels[id]}</option>`).join('')}
         </select>
       </div>
+      <button id="g-trend" class="trend-toggle${pref.trend ? ' trend-on' : ''}" aria-pressed="${pref.trend}">
+        <span class="trend-swatch"></span>${TREND_WINDOW_DAYS}-day average
+      </button>
       <div class="chart-title">${esc(metrics.find(m => m[0] === pref.metric)?.[1] || '')}${unitFor ? ` (${esc(unitFor)})` : ''}</div>
       <div id="chart"></div>
     </div>`;
@@ -1384,8 +1403,13 @@ async function renderGraphTab(body, ex) {
     pref.range = e.target.value;
     renderGraphTab(body, ex);
   };
+  body.querySelector('#g-trend').onclick = () => {
+    pref.trend = !pref.trend;
+    renderGraphTab(body, ex);
+  };
   const isTimeMetric = pref.metric === 'totalTime' || pref.metric === 'maxTime';
   renderLineChart(body.querySelector('#chart'), points, {
+    trend,
     formatValue: isTimeMetric
       ? v => timeToString(v * 60)
       : v => fmtNum(v, pref.metric === 'pace' ? 1 : v >= 1000 ? 0 : 1),

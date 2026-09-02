@@ -1,5 +1,6 @@
-// Single-series SVG line chart with crosshair + tooltip hover layer.
-// Colors come from CSS custom properties so light/dark swap automatically.
+// Single-series SVG scatter chart with crosshair + tooltip hover layer and an
+// optional trailing-average curve. Colors come from CSS custom properties so
+// light/dark swap automatically.
 
 const NS = 'http://www.w3.org/2000/svg';
 
@@ -39,7 +40,9 @@ function fmtDateLong(ms) {
 }
 
 // points: [{ date: 'YYYY-MM-DD', value: number }] sorted ascending.
-// opts: { formatValue(v) -> string }
+// opts: { formatValue(v) -> string, trend: [{ date, value }] }
+// trend is an optional pre-computed overlay series (e.g. a trailing average)
+// drawn as a curve on top of the point cloud.
 export function renderLineChart(container, points, opts = {}) {
   container.textContent = '';
   container.classList.add('chart-box');
@@ -55,10 +58,12 @@ export function renderLineChart(container, points, opts = {}) {
   const W = Math.max(280, container.clientWidth || 320);
   const H = 230;
 
-  const pts = points.map(p => ({ x: Date.parse(p.date + 'T00:00:00Z'), y: p.value }));
+  const toXY = p => ({ x: Date.parse(p.date + 'T00:00:00Z'), y: p.value });
+  const pts = points.map(toXY);
+  const trendPts = (opts.trend || []).map(toXY);
   let xMin = pts[0].x, xMax = pts[pts.length - 1].x;
   if (xMin === xMax) { xMin -= 43_200_000; xMax += 43_200_000; }
-  const yVals = pts.map(p => p.y);
+  const yVals = pts.concat(trendPts).map(p => p.y);
   const { lo, hi, ticks } = niceTicks(Math.min(...yVals), Math.max(...yVals), 4);
 
   // Left margin grows with the widest tick label (~6.5px/char at 11px) so
@@ -97,10 +102,12 @@ export function renderLineChart(container, points, opts = {}) {
     svg.appendChild(lbl);
   }
 
-  const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join('');
-  svg.appendChild(svgEl('path', { d, class: 'chart-line-path' }));
+  if (trendPts.length > 1) {
+    const d = trendPts.map((p, i) => `${i === 0 ? 'M' : 'L'}${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join('');
+    svg.appendChild(svgEl('path', { d, class: 'chart-trend-path' }));
+  }
   for (const p of pts) {
-    svg.appendChild(svgEl('circle', { cx: X(p.x).toFixed(1), cy: Y(p.y).toFixed(1), r: 2.5, class: 'chart-dot' }));
+    svg.appendChild(svgEl('circle', { cx: X(p.x).toFixed(1), cy: Y(p.y).toFixed(1), r: 3, class: 'chart-dot' }));
   }
 
   // hover layer: crosshair + enlarged marker + tooltip on nearest point
