@@ -297,9 +297,15 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   border: 1px solid var(--field-border); border-radius: 3px;
   padding: 9px 8px; font: inherit; font-size: 14px;
 }
+.trend-controls { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.trend-controls select {
+  background: var(--field-bg); color: var(--ink);
+  border: 1px solid var(--field-border); border-radius: 3px;
+  padding: 7px 8px; font: inherit; font-size: 13px;
+}
 .trend-toggle {
   display: inline-flex; align-items: center; gap: 7px;
-  margin-bottom: 12px; padding: 7px 12px;
+  padding: 7px 12px;
   font-size: 13px; color: var(--ink-2);
   background: var(--field-bg);
   border: 1px solid var(--field-border); border-radius: 999px;
