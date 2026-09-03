@@ -16,7 +16,7 @@ import {
   dayLabel, daySetCount, blockTarget, nextDayIndex, courseStreak, weekCount,
 } from './courses.js';
 
-export const APP_VERSION = '1.13.0';
+export const APP_VERSION = '1.14.0';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
@@ -1311,13 +1311,17 @@ const GRAPH_METRICS = {
     ['maxLevel', 'Max Level'],
   ],
 };
-const GRAPH_RANGES = [['3m', '3M', 91], ['6m', '6M', 182], ['1y', '1Y', 365], ['all', 'All', Infinity]];
-const TREND_WINDOW_DAYS = 30;
+const GRAPH_RANGES = [
+  ['3m', '3M', 91], ['6m', '6M', 182], ['1y', '1Y', 365],
+  ['2y', '2Y', 730], ['3y', '3Y', 1095], ['all', 'All', Infinity],
+];
+const TREND_WINDOWS = [7, 14, 30, 60, 90, 180]; // days
 const graphPrefs = {}; // per-exercise metric/range/trend selection
 
 async function renderGraphTab(body, ex) {
   const metrics = GRAPH_METRICS[ex.type] || GRAPH_METRICS.weight_reps;
-  const pref = graphPrefs[ex.id] || (graphPrefs[ex.id] = { metric: metrics[0][0], range: 'all', trend: false });
+  const pref = graphPrefs[ex.id] ||
+    (graphPrefs[ex.id] = { metric: metrics[0][0], range: 'all', trend: false, trendWindow: 30 });
   const sets = await setsForExercise(ex.id);
 
   const rangeDays = GRAPH_RANGES.find(r => r[0] === pref.range)?.[2] ?? Infinity;
@@ -1359,7 +1363,7 @@ async function renderGraphTab(body, ex) {
 
   let trend = null;
   if (pref.trend) {
-    const win = TREND_WINDOW_DAYS * 86_400_000;
+    const win = pref.trendWindow * 86_400_000;
     const xs = allPoints.map(p => Date.parse(p.date + 'T00:00:00Z'));
     let j = 0, sum = 0;
     trend = allPoints.map((p, i) => {
@@ -1375,7 +1379,10 @@ async function renderGraphTab(body, ex) {
     distance: distUnitLabel(), totalTime: '', maxTime: '', pace: `min/${distUnitLabel()}`,
   }[pref.metric] || '';
 
-  const rangeLabels = { '3m': '3 Months', '6m': '6 Months', '1y': '1 Year', all: 'All Time' };
+  const rangeLabels = {
+    '3m': '3 Months', '6m': '6 Months', '1y': '1 Year',
+    '2y': '2 Years', '3y': '3 Years', all: 'All Time',
+  };
   body.innerHTML = `
     <div class="graph-wrap">
       <div class="graph-controls">
@@ -1388,9 +1395,16 @@ async function renderGraphTab(body, ex) {
             `<option value="${id}" ${pref.range === id ? 'selected' : ''}>${rangeLabels[id]}</option>`).join('')}
         </select>
       </div>
-      <button id="g-trend" class="trend-toggle${pref.trend ? ' trend-on' : ''}" aria-pressed="${pref.trend}">
-        <span class="trend-swatch"></span>${TREND_WINDOW_DAYS}-day average
-      </button>
+      <div class="trend-controls">
+        <button id="g-trend" class="trend-toggle${pref.trend ? ' trend-on' : ''}" aria-pressed="${pref.trend}">
+          <span class="trend-swatch"></span>Average
+        </button>
+        ${pref.trend ? `
+          <select id="g-window" aria-label="Averaging window">
+            ${TREND_WINDOWS.map(d =>
+              `<option value="${d}" ${pref.trendWindow === d ? 'selected' : ''}>${d}-day window</option>`).join('')}
+          </select>` : ''}
+      </div>
       <div class="chart-title">${esc(metrics.find(m => m[0] === pref.metric)?.[1] || '')}${unitFor ? ` (${esc(unitFor)})` : ''}</div>
       <div id="chart"></div>
     </div>`;
@@ -1405,6 +1419,11 @@ async function renderGraphTab(body, ex) {
   };
   body.querySelector('#g-trend').onclick = () => {
     pref.trend = !pref.trend;
+    renderGraphTab(body, ex);
+  };
+  const winSel = body.querySelector('#g-window');
+  if (winSel) winSel.onchange = e => {
+    pref.trendWindow = parseInt(e.target.value, 10);
     renderGraphTab(body, ex);
   };
   const isTimeMetric = pref.metric === 'totalTime' || pref.metric === 'maxTime';
