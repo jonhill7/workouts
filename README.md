@@ -88,10 +88,15 @@ any prior CSV import), per-exercise notes, and routines.
   lower one, so 100 × 10 also sets your 9-rep record to at least 100)
 - **Set-number / resistance-level tracking**: two extra exercise types log a
   unit-less integer **level** alongside reps or time — "Set/Level × Reps" for
-  bodyweight work tracked by set number (max reps on your 1st set, 2nd set…)
-  or by band strength, and "Level / Time" for machine resistance (elliptical,
-  bike). Records and 🏆 PRs compare within the same level, and the tracker
-  auto-advances the set number as you log
+  bodyweight work tracked by set number or by band strength, and
+  "Level / Time" for machine resistance (elliptical, bike). For resistance
+  levels, Records and 🏆 PRs compare within the same level. For set numbers
+  they're per workout, by set count: 10, 8, 12 reps is 12 for 1 set, 10 for
+  2 sets and 8 for 3 sets, so each row is the most reps every one of N sets
+  reached in a single workout (always non-increasing down the table). A set
+  number that doesn't go up starts a new workout, so two sessions logged on
+  one day count independently. The tracker auto-advances the set number as
+  you log
 - **Proxy conversion for FitNotes refugees**: FitNotes can't track a set
   number or resistance, so a common workaround was logging it in the weight
   or distance field (weight "2 lbs" = 2nd set, distance "8 m" = resistance 8).
@@ -126,6 +131,7 @@ node tests/importer.test.mjs        # unit tests for the CSV import logic
 node tests/fitnotes-db.test.mjs     # unit tests for the .fitnotes SQLite parser
 node tests/streaks.test.mjs         # unit tests for routine completion/streaks
 node tests/courses.test.mjs         # unit tests for the guided-course plans
+node tests/records.test.mjs         # unit tests for PR detection and record tables
 python3 -m http.server -d app 8000  # run locally at http://localhost:8000
 ```
 
