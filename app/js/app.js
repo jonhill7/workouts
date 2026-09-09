@@ -4,7 +4,7 @@ import {
   LEVEL_TYPES, LEVEL_SOURCES, DEFAULT_LEVEL_SOURCE, levelFromSet, convertToLevel,
 } from './importer.js';
 import { loadSqlJs, looksLikeSQLite, parseFitNotesDB } from './fitnotes-db.js';
-import { computePRIds, repRecords } from './records.js';
+import { computePRIds, repRecords, setCountRecords } from './records.js';
 import * as exporter from './exporter.js';
 import { renderLineChart } from './charts.js';
 import {
@@ -16,7 +16,7 @@ import {
   dayLabel, daySetCount, blockTarget, nextDayIndex, courseStreak, weekCount,
 } from './courses.js';
 
-export const APP_VERSION = '1.14.0';
+export const APP_VERSION = '1.15.0';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
@@ -409,7 +409,7 @@ async function renderHome() {
   const prByEx = new Map();
   await Promise.all(groups.map(async g => {
     if (!g.exercise) return;
-    prByEx.set(g.exercise.id, computePRIds(await setsForExercise(g.exercise.id), g.exercise.type));
+    prByEx.set(g.exercise.id, computePRIds(await setsForExercise(g.exercise.id), g.exercise.type, g.exercise.levelKind));
   }));
 
   const groupsHtml = groups.map(g => {
@@ -1006,7 +1006,7 @@ async function renderTrackTab(body, ex) {
   const usesReps = typeUsesReps(ex.type);
   const usesTime = typeUsesTime(ex.type);
   const allSets = await setsForExercise(ex.id);
-  const prIds = computePRIds(allSets, ex.type);
+  const prIds = computePRIds(allSets, ex.type, ex.levelKind);
   const daySets = allSets.filter(s => s.date === state.date);
   const draft = trackDraft[ex.id] || {};
   let selectedId = draft.selectedId && daySets.some(s => s.id === draft.selectedId) ? draft.selectedId : null;
@@ -1205,7 +1205,7 @@ async function renderTrackTab(body, ex) {
     const newId = await db.put('sets', buildRecord({ seq: nextSeq() }));
     delete trackDraft[ex.id];
     const after = await setsForExercise(ex.id);
-    if (computePRIds(after, ex.type).has(newId)) toast('🏆 New personal record!');
+    if (computePRIds(after, ex.type, ex.levelKind).has(newId)) toast('🏆 New personal record!');
     if (S.restSeconds > 0 && usesReps) restTimer.start(S.restSeconds);
     rerender();
   });
@@ -1241,7 +1241,7 @@ async function renderHistoryTab(body, ex) {
     body.innerHTML = '<div class="empty-state"><p>No sets logged yet.</p></div>';
     return;
   }
-  const prIds = computePRIds(sets, ex.type);
+  const prIds = computePRIds(sets, ex.type, ex.levelKind);
   const byDate = new Map();
   for (const s of sets) {
     if (!byDate.has(s.date)) byDate.set(s.date, []);
@@ -1441,6 +1441,12 @@ async function renderRecordsTab(body, ex) {
     body.innerHTML = '<div class="empty-state"><p>No sets logged yet.</p></div>';
     return;
   }
+  const tile = (label, value, date) => `
+    <div class="stat-tile">
+      <div class="stat-label">${label}</div>
+      <div class="stat-value">${value}</div>
+      <div class="stat-date">${esc(fmtDateLong(date))}</div>
+    </div>`;
 
   if (ex.type === 'distance_time') {
     let maxDist = null, maxTime = null, bestPace = null;
@@ -1452,17 +1458,49 @@ async function renderRecordsTab(body, ex) {
         if (!bestPace || pace < bestPace.pace) bestPace = { ...s, pace };
       }
     }
-    const tile = (label, value, date) => `
-      <div class="stat-tile">
-        <div class="stat-label">${label}</div>
-        <div class="stat-value">${value}</div>
-        <div class="stat-date">${esc(fmtDateLong(date))}</div>
-      </div>`;
     body.innerHTML = `<div class="records-wrap"><div class="stat-grid">
       ${maxDist ? tile('Longest distance', `${fmtNum(mToDisplayDist(maxDist.distance))} ${distUnitLabel()}`, maxDist.date) : ''}
       ${maxTime ? tile('Longest time', timeToString(maxTime.time), maxTime.date) : ''}
       ${bestPace ? tile('Best pace', `${fmtNum(bestPace.pace / 60, 1)} min/${distUnitLabel()}`, bestPace.date) : ''}
     </div></div>`;
+    return;
+  }
+
+  const lifetimeTile = `
+    <div class="stat-tile">
+      <div class="stat-label">Lifetime</div>
+      <div class="stat-value">${sets.length} sets</div>
+      <div class="stat-date">${new Set(sets.map(s => s.date)).size} workouts</div>
+    </div>`;
+
+  // Set-numbered exercises: records are per workout, by how many sets
+  // reached a value — the 3-set row is the most reps you hit on all of three
+  // sets in one workout, so it never exceeds the 2-set row.
+  if (typeUsesLevel(ex.type) && ex.levelKind !== 'resistance') {
+    const isReps = ex.type === 'level_reps';
+    const fmtVal = v => (isReps ? `${v} reps` : timeToString(v));
+    const records = setCountRecords(sets, ex.type);
+    const top = records.get(1);
+    const longest = records.get(records.size); // the earliest workout with the most sets
+    const rows = [...records.keys()].sort((a, b) => a - b).map(n => {
+      const r = records.get(n);
+      return `<tr><td>${n}</td><td>${fmtVal(r.value)}</td><td class="rec-date">${esc(r.date)}</td></tr>`;
+    }).join('');
+    body.innerHTML = `
+      <div class="records-wrap">
+      <div class="stat-grid">
+        ${top ? tile(isReps ? 'Most reps' : 'Longest time', fmtVal(top.value), top.date) : ''}
+        ${longest ? tile('Most sets', String(records.size), longest.date) : ''}
+        ${lifetimeTile}
+      </div>
+      ${rows ? `
+        <div class="chart-title">Best ${isReps ? 'reps' : 'time'} across N sets</div>
+        <p class="rec-note">Each row is the best ${isReps ? 'rep count' : 'time'} every one of that many sets reached in a single workout.</p>
+        <table class="rec-table">
+          <thead><tr><th>Sets</th><th>Best</th><th>Date</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>` : ''}
+      </div>`;
     return;
   }
 
@@ -1480,12 +1518,6 @@ async function renderRecordsTab(body, ex) {
       if (!best || v > (isReps ? best.reps : best.time)) best = s;
       if (lvl > 0 && (!topLevel || lvl > (topLevel.level || 0))) topLevel = s;
     }
-    const tile = (label, value, date) => `
-      <div class="stat-tile">
-        <div class="stat-label">${label}</div>
-        <div class="stat-value">${value}</div>
-        <div class="stat-date">${esc(fmtDateLong(date))}</div>
-      </div>`;
     const levelRows = [...bestByLevel.keys()].sort((a, b) => a - b).map(l => {
       const s = bestByLevel.get(l);
       return `<tr><td>${l}</td><td>${isReps ? `${s.reps} reps` : timeToString(s.time)}</td><td class="rec-date">${esc(s.date)}</td></tr>`;
@@ -1496,11 +1528,7 @@ async function renderRecordsTab(body, ex) {
         ${best ? tile(isReps ? 'Most reps' : 'Longest time',
           isReps ? `${best.reps} × ${noun.toLowerCase()} ${best.level || 0}` : timeToString(best.time), best.date) : ''}
         ${topLevel ? tile(`Highest ${noun.toLowerCase()}`, String(topLevel.level), topLevel.date) : ''}
-        <div class="stat-tile">
-          <div class="stat-label">Lifetime</div>
-          <div class="stat-value">${sets.length} sets</div>
-          <div class="stat-date">${[...new Set(sets.map(s => s.date))].size} workouts</div>
-        </div>
+        ${lifetimeTile}
       </div>
       ${levelRows ? `
         <div class="chart-title">Best ${isReps ? 'reps' : 'time'} per ${noun.toLowerCase()}</div>
@@ -1522,13 +1550,6 @@ async function renderRecordsTab(body, ex) {
   }
   const bestByReps = repRecords(sets);
 
-  const tile = (label, value, date) => `
-    <div class="stat-tile">
-      <div class="stat-label">${label}</div>
-      <div class="stat-value">${value}</div>
-      <div class="stat-date">${esc(fmtDateLong(date))}</div>
-    </div>`;
-
   const repRows = [...bestByReps.keys()].sort((a, b) => a - b).map(r => {
     const s = bestByReps.get(r);
     return `<tr><td>${r}</td><td>${fmtWeight(s.weight)} ${getUnit()}</td><td class="rec-date">${esc(s.date)}</td></tr>`;
@@ -1540,11 +1561,7 @@ async function renderRecordsTab(body, ex) {
       ${maxW ? tile('Max weight', `${fmtWeight(maxW.weight)} ${getUnit()} × ${maxW.reps}`, maxW.date) : ''}
       ${best1 ? tile('Best est. 1RM', `${fmtNum(kgToDisplay(best1.e), 1)} ${getUnit()}`, best1.date) : ''}
       ${maxVol ? tile('Best set volume', `${fmtNum(kgToDisplay(maxVol.vol), 0)} ${getUnit()}`, maxVol.date) : ''}
-      <div class="stat-tile">
-        <div class="stat-label">Lifetime</div>
-        <div class="stat-value">${sets.length} sets</div>
-        <div class="stat-date">${[...new Set(sets.map(s => s.date))].size} workouts</div>
-      </div>
+      ${lifetimeTile}
     </div>
     ${repRows ? `
       <div class="chart-title">Rep records</div>

@@ -347,6 +347,7 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .rec-table th, .rec-table td { text-align: left; padding: 9px 12px; border-top: 1px solid var(--hairline); font-variant-numeric: tabular-nums; }
 .rec-table th { font-size: 12px; color: var(--ink-2); border-top: none; text-transform: uppercase; letter-spacing: 0.04em; }
 .rec-date { color: var(--muted); font-size: 13px; }
+.rec-note { color: var(--muted); font-size: 12px; margin: 0 2px 8px; }
 
 /* ---- settings ---- */
 .settings { padding: 0 0 calc(20px + env(safe-area-inset-bottom)); }

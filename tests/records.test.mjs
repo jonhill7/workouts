@@ -2,7 +2,7 @@
 // Run: node tests/records.test.mjs
 import { strict as assert } from 'node:assert';
 import { KG_PER_LB, convertToLevel } from '../app/js/importer.js';
-import { computePRIds, repRecords } from '../app/js/records.js';
+import { computePRIds, repRecords, setCountRecords, splitWorkouts } from '../app/js/records.js';
 
 let passed = 0;
 const test = (name, fn) => { fn(); passed++; console.log('  ✓', name); };
@@ -103,17 +103,21 @@ const lungesProxy = () => [
   set('2016-11-08', 1 * KG_PER_LB, 80),
 ];
 
-test('proxy-encoded data converted to level_reps gets trophies on rep improvements', () => {
+test('proxy-encoded data converted to level_reps gets trophies on per-workout improvements', () => {
   const sets = lungesProxy().map(s => convertToLevel('weight_lbs', s));
-  const prs = computePRIds(sets, 'level_reps');
+  const prs = computePRIds(sets, 'level_reps', 'set');
   const flagged = sets.filter(s => prs.has(s.id)).map(s => `${s.date}#${s.level}`);
   assert.deepEqual(flagged, [
-    '2016-10-19#2', // 60 reps beats 50 on set 2
-    '2016-10-27#1', // 75 beats 50 on set 1
-    '2016-10-27#2', // 65 beats 60 on set 2
-    '2016-10-31#2', // 80 beats 65 on set 2
-    '2016-10-31#3', // 90 beats 50 on set 3
-    '2016-11-08#1', // 80 beats 75 on set 1
+    '2016-10-19#2', // 60 for 1 set beats 50
+    '2016-10-27#1', // 75 for 1 set beats 60
+    '2016-10-27#2', // 65 for 2 sets beats 50
+    '2016-10-31#2', // 80 for 1 set beats 75; 75 for 2 sets beats 65
+    '2016-10-31#3', // 90 / 80 / 75 for 1 / 2 / 3 sets all beat the standing records
+    // 2016-11-08#1: 80 on a lone set doesn't beat 90 for 1 set
+  ]);
+  const recs = setCountRecords(sets, 'level_reps');
+  assert.deepEqual([...recs].map(([n, r]) => [n, r.value, r.date]), [
+    [1, 90, '2016-10-31'], [2, 80, '2016-10-31'], [3, 75, '2016-10-31'],
   ]);
 });
 
@@ -122,15 +126,88 @@ test('unconverted proxy data still yields records rows for its high rep counts',
   assert.deepEqual([...recs.keys()].sort((a, b) => a - b), [50, 60, 65, 75, 80, 90]);
 });
 
-test('level PRs compare within a level only, first set per level never counts', () => {
+test('resistance-level PRs compare within a level only, first set per level never counts', () => {
   const sets = [
     set('2026-08-01', 0, 30, { level: 1 }),
     set('2026-08-01', 0, 22, { level: 2 }),
     set('2026-08-03', 0, 31, { level: 1 }), // PR
     set('2026-08-03', 0, 22, { level: 2 }), // tie: not a PR
   ];
-  const prs = computePRIds(sets, 'level_reps');
+  const prs = computePRIds(sets, 'level_reps', 'resistance');
   assert.deepEqual([...prs], [sets[2].id]);
+});
+
+// Set-numbered exercises: records are per workout by set count — the n-set
+// record is the highest rep threshold that n sets of one workout all reached.
+test('splitWorkouts starts a new workout when the set number does not go up, or the date changes', () => {
+  const sets = [
+    set('2026-08-01', 0, 10, { level: 1 }), set('2026-08-01', 0, 8, { level: 2 }),
+    set('2026-08-01', 0, 12, { level: 1 }), set('2026-08-01', 0, 9, { level: 2 }), set('2026-08-01', 0, 7, { level: 3 }),
+    set('2026-08-02', 0, 11, { level: 1 }),
+    set('2026-08-02', 0, 11, { level: 1 }), // same set number again: a third workout
+    set('2026-08-02', 0, 5, { level: 3 }),  // skipping 2 stays in the same workout
+  ];
+  assert.deepEqual(splitWorkouts(sets).map(w => w.map(s => s.reps)), [[10, 8], [12, 9, 7], [11], [11, 5]]);
+});
+
+test('set-count records: 10, 8, 12 reps → 1 set 12, 2 sets 10, 3 sets 8', () => {
+  const sets = [
+    set('2026-08-01', 0, 10, { level: 1 }),
+    set('2026-08-01', 0, 8, { level: 2 }),
+    set('2026-08-01', 0, 12, { level: 3 }),
+  ];
+  const recs = setCountRecords(sets, 'level_reps');
+  assert.deepEqual([...recs].map(([n, r]) => [n, r.value]), [[1, 12], [2, 10], [3, 8]]);
+  for (const r of recs.values()) assert.equal(r.date, '2026-08-01');
+});
+
+test('set-count records: two workouts in a day count independently, ties go to the earlier one', () => {
+  const sets = [
+    set('2026-08-01', 0, 10, { level: 1 }), set('2026-08-01', 0, 9, { level: 2 }),
+    set('2026-08-01', 0, 12, { level: 1 }), set('2026-08-01', 0, 8, { level: 2 }), set('2026-08-01', 0, 7, { level: 3 }),
+    set('2026-08-05', 0, 12, { level: 1 }), set('2026-08-05', 0, 9, { level: 2 }), // ties 1-set and 2-set records
+  ];
+  const recs = setCountRecords(sets, 'level_reps');
+  assert.deepEqual([...recs].map(([n, r]) => [n, r.value, r.date]), [
+    [1, 12, '2026-08-01'], // second workout's 12
+    [2, 9, '2026-08-01'],  // first workout: both sets ≥ 9; the second only managed 8
+    [3, 7, '2026-08-01'],
+  ]);
+  assert.deepEqual(recs.get(2).sets.map(s => s.reps), [10, 9]);
+  // Monotonically decreasing by construction.
+  const vals = [...recs.values()].map(r => r.value);
+  for (let i = 1; i < vals.length; i++) assert.ok(vals[i] <= vals[i - 1]);
+});
+
+test('set-numbered PRs: a set earns a trophy when it lifts any set-count threshold past the record', () => {
+  const sets = [
+    set('2026-08-01', 0, 10, { level: 1 }), // first workout: nothing to beat
+    set('2026-08-01', 0, 8, { level: 2 }),
+    set('2026-08-01', 0, 12, { level: 3 }), // 12 for 1 set beats this workout's 10
+    set('2026-08-03', 0, 11, { level: 1 }), // 11 < 12
+    set('2026-08-03', 0, 11, { level: 2 }), // 11 for 2 sets beats 10
+    set('2026-08-03', 0, 8, { level: 3 }),  // 8 for 3 sets ties, not a PR
+    set('2026-08-05', 0, 9, { level: 1 }),
+    set('2026-08-05', 0, 9, { level: 2 }),
+    set('2026-08-05', 0, 9, { level: 3 }),  // 9 for 3 sets beats 8
+    set('2026-08-05', 0, 6, { level: 4 }),  // first ever 4th set: no record to beat
+  ];
+  const prs = computePRIds(sets, 'level_reps', 'set');
+  assert.deepEqual([...prs].sort((a, b) => a - b), [sets[2].id, sets[4].id, sets[8].id]);
+  // levelKind defaults to set-number semantics, matching the app's default.
+  assert.deepEqual([...computePRIds(sets, 'level_reps')], [...prs]);
+});
+
+test('set-numbered timed exercises use time as the value', () => {
+  const sets = [
+    set('2026-08-01', 0, 0, { level: 1, time: 60 }),
+    set('2026-08-01', 0, 0, { level: 2, time: 45 }),
+    set('2026-08-03', 0, 0, { level: 1, time: 50 }),
+    set('2026-08-03', 0, 0, { level: 2, time: 50 }), // 50 for 2 sets beats 45
+  ];
+  const recs = setCountRecords(sets, 'level_time');
+  assert.deepEqual([...recs].map(([n, r]) => [n, r.value, r.date]), [[1, 60, '2026-08-01'], [2, 50, '2026-08-03']]);
+  assert.deepEqual([...computePRIds(sets, 'level_time', 'set')], [sets[3].id]);
 });
 
 test('cardio PRs: longest distance ever; duration-only sets track time', () => {
