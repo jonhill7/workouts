@@ -1,27 +1,61 @@
-name: Deploy to GitHub Pages
+name: Test and deploy
 
+# Tests run on every push and pull request. Deploying to GitHub Pages happens
+# only from main (or a manual run), and only after the tests pass.
 on:
   push:
-    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
 
 jobs:
-  deploy:
+  test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Unit tests
+        run: for f in tests/*.test.mjs; do echo "== $f"; node "$f" || exit 1; done
+
+      - name: Install Playwright + Chromium
+        run: |
+          npm install --no-save --no-package-lock playwright@1.63.0
+          npx playwright install --with-deps chromium
+
+      - name: Smoke test (boot, log, import, graph, export, offline)
+        run: node tests/smoke.e2e.mjs
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: true
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+
+      # Every deploy gets a distinct service-worker cache name, so phones pick
+      # up the new build even when nobody bumped VERSION by hand.
+      - name: Stamp the service worker with this commit
+        run: |
+          sha="${GITHUB_SHA::7}"
+          sed -i -E "s/^const VERSION = '([^']*)';/const VERSION = '\1+${sha}';/" app/sw.js
+          grep -E "^const VERSION = '.*\+${sha}';" app/sw.js
+
       - uses: actions/configure-pages@v5
         with:
           enablement: true

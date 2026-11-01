@@ -1,6 +1,8 @@
 // Service worker: precache the app shell so it works fully offline.
-// Bump VERSION on every release — deploys are picked up on next visit
-// (an "Update ready" toast offers an immediate reload).
+// The deploy workflow appends the commit to VERSION ('v1.15.0+abc1234'), so
+// every deploy gets a fresh cache and phones pick it up on the next visit
+// (an "Update ready" toast offers an immediate reload). Bump the number here
+// alongside APP_VERSION in js/app.js when you want a new visible version.
 
 const VERSION = 'v1.15.0';
 const CACHE = `workout-log-${VERSION}`;

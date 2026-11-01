@@ -10,12 +10,13 @@ itself on the next launch.
 - **`app/`** — the entire application: plain HTML/CSS/JS modules, no build
   step, no dependencies. Open `app/index.html` over any static server and it
   runs.
-- **`.github/workflows/deploy.yml`** — deploys `app/` to GitHub Pages on every
-  push to `main` (or manually via the Actions tab → *Deploy to GitHub Pages* →
-  *Run workflow*).
+- **`.github/workflows/deploy.yml`** — runs the tests on every push, then
+  deploys `app/` to GitHub Pages from `main` once they pass (or manually via
+  the Actions tab → *Test and deploy* → *Run workflow*).
 - **`app/sw.js`** — service worker; precaches everything so the app works fully
-  offline. Bump `VERSION` when releasing so installed phones pick up the new
-  build (an "Update ready" toast offers a one-tap reload).
+  offline. Each deploy stamps the commit onto its `VERSION`, so installed
+  phones pick up the new build (an "Update ready" toast offers a one-tap
+  reload).
 
 ## First-time setup
 
@@ -127,23 +128,31 @@ avoids, so backups are one tap instead:
 ## Development
 
 ```sh
-node tests/importer.test.mjs        # unit tests for the CSV import logic
-node tests/fitnotes-db.test.mjs     # unit tests for the .fitnotes SQLite parser
-node tests/streaks.test.mjs         # unit tests for routine completion/streaks
-node tests/courses.test.mjs         # unit tests for the guided-course plans
-node tests/records.test.mjs         # unit tests for PR detection and record tables
-python3 -m http.server -d app 8000  # run locally at http://localhost:8000
+for f in tests/*.test.mjs; do node "$f"; done   # unit tests (importer, .fitnotes parser,
+                                                # streaks, courses, records, levels)
+node tests/smoke.e2e.mjs                        # end-to-end smoke test (needs playwright)
+python3 -m http.server -d app 8000              # run locally at http://localhost:8000
 ```
 
-The end-to-end smoke test (Playwright) lives in session scratch space; it
-drives boot → log set → import → graph → export round-trip.
+The smoke test (`tests/smoke.e2e.mjs`) serves `app/` itself and drives headless
+Chromium through boot → log a set → CSV import → graph → CSV export → offline
+reload from the service worker. The offline step fails if a file is missing
+from `sw.js`'s precache list. It needs the `playwright` package and a Chromium:
+`npm i --no-save playwright && npx playwright install chromium`.
+
+`.github/workflows/deploy.yml` runs the unit tests and the smoke test on every
+push and pull request; it deploys to Pages only from `main`, and only after
+they pass.
 
 ### Release checklist
 
-1. Make changes under `app/`.
-2. Bump `VERSION` in `app/sw.js` (and `APP_VERSION` in `app/js/app.js`).
-3. `node tests/importer.test.mjs`.
-4. Push to `main` → Pages deploys → phone shows "Update ready" on next open.
+1. Make changes under `app/`. A new file under `app/` also goes in `sw.js`'s
+   `ASSETS` list (the smoke test's offline step catches a missing one).
+2. Optionally bump `APP_VERSION` in `app/js/app.js` and `VERSION` in
+   `app/sw.js` for a new visible version number. Phones update either way:
+   the deploy stamps the commit onto the service worker's version.
+3. Push to `main` → tests run → Pages deploys → phone shows "Update ready" on
+   next open.
 
 ## Roadmap ideas
 
