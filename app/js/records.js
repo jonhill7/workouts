@@ -187,28 +187,32 @@ export function riegelTime(timeSec, distM, targetM = EQUIV_DIST_M) {
   return timeSec * (targetM / distM) ** RIEGEL_EXP;
 }
 
-// Picks the per-set score function for this exercise's history.
-function setScorer(sets, type, levelKind) {
+// How this exercise's history is scored: { mode, scoreOf, level }.
+// mode is the Score's unit: 'e1rm' (kg), 'speed' (5K-equivalent m/s),
+// 'distance' (m), 'time' (sec) or 'reps'. level is set for resistance
+// levels: only sets at that level score.
+export function scoreInfo(sets, type, levelKind) {
   if (type === 'distance_time') {
     if (sets.some(s => s.distance > 0 && s.time > 0)) {
-      return s => { const t = riegelTime(s.time, s.distance); return t > 0 ? EQUIV_DIST_M / t : 0; };
+      return { mode: 'speed', scoreOf: s => { const t = riegelTime(s.time, s.distance); return t > 0 ? EQUIV_DIST_M / t : 0; } };
     }
-    if (sets.some(s => s.distance > 0)) return s => s.distance;
-    return s => s.time;
+    if (sets.some(s => s.distance > 0)) return { mode: 'distance', scoreOf: s => s.distance };
+    return { mode: 'time', scoreOf: s => s.time };
   }
   if (LEVEL_TYPES.has(type)) {
     const valueOf = levelValueOf(type);
-    if (levelKind !== 'resistance') return valueOf;
+    const mode = type === 'level_time' ? 'time' : 'reps';
+    if (levelKind !== 'resistance') return { mode, scoreOf: valueOf };
     const lastDate = sets.reduce((d, s) => (valueOf(s) > 0 && s.date > d ? s.date : d), '');
-    const ref = Math.max(0, ...sets.filter(s => s.date === lastDate && valueOf(s) > 0).map(s => s.level || 0));
-    return s => ((s.level || 0) === ref ? valueOf(s) : 0);
+    const level = Math.max(0, ...sets.filter(s => s.date === lastDate && valueOf(s) > 0).map(s => s.level || 0));
+    return { mode, level, scoreOf: s => ((s.level || 0) === level ? valueOf(s) : 0) };
   }
-  if (sets.some(s => s.weight > 0 && s.reps > 0)) return s => epley1RM(s.weight, s.reps);
-  return s => s.reps;
+  if (sets.some(s => s.weight > 0 && s.reps > 0)) return { mode: 'e1rm', scoreOf: s => epley1RM(s.weight, s.reps) };
+  return { mode: 'reps', scoreOf: s => s.reps };
 }
 
 export function workoutScores(sets, type, levelKind) {
-  const scoreOf = setScorer(sets, type, levelKind);
+  const { scoreOf } = scoreInfo(sets, type, levelKind);
   const byDate = new Map();
   for (const s of sets) {
     const v = scoreOf(s) || 0;

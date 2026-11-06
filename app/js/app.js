@@ -4,7 +4,9 @@ import {
   LEVEL_TYPES, LEVEL_SOURCES, DEFAULT_LEVEL_SOURCE, levelFromSet, convertToLevel,
 } from './importer.js';
 import { loadSqlJs, looksLikeSQLite, parseFitNotesDB } from './fitnotes-db.js';
-import { computePRIds, repRecords, setCountRecords, workoutScores, scoreBar, epley1RM } from './records.js';
+import {
+  computePRIds, repRecords, setCountRecords, workoutScores, scoreBar, scoreInfo, epley1RM, EQUIV_DIST_M,
+} from './records.js';
 import * as exporter from './exporter.js';
 import { renderLineChart } from './charts.js';
 import {
@@ -198,6 +200,30 @@ function setRowHTML(s, ex, i, extra = '', isPR = false) {
 }
 
 const est1RM = epley1RM; // shared with the workout Score in records.js
+
+// A workout Score (see scoreInfo in records.js) in display units: `value`
+// for graphing (higher is better; time in minutes), `text` for labels, and
+// `unit` for the graph title.
+function scoreDisplay(info, score) {
+  switch (info.mode) {
+    case 'e1rm': {
+      const v = kgToDisplay(score);
+      return { value: v, text: `${fmtNum(v, 1)} ${getUnit()}`, unit: `est. 1RM, ${getUnit()}` };
+    }
+    case 'speed': {
+      const v = mToDisplayDist(score * 3600);
+      const unit = isMetric() ? 'km/h' : 'mph';
+      return { value: v, text: `${fmtNum(v, 1)} ${unit} (5K in ${timeToString(EQUIV_DIST_M / score)})`,
+        unit: `5K-equivalent speed, ${unit}` };
+    }
+    case 'distance': {
+      const v = mToDisplayDist(score);
+      return { value: v, text: `${fmtNum(v)} ${distUnitLabel()}`, unit: distUnitLabel() };
+    }
+    case 'time': return { value: score / 60, text: timeToString(score), unit: info.level ? `level ${info.level}` : '' };
+    default: return { value: score, text: `${score} reps`, unit: info.level ? `reps at level ${info.level}` : 'reps' };
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Seed data (FitNotes-style defaults; imports merge by name)
@@ -1271,6 +1297,8 @@ async function renderHistoryTab(body, ex) {
     if (!byDate.has(s.date)) byDate.set(s.date, []);
     byDate.get(s.date).push(s);
   }
+  const info = scoreInfo(sets, ex.type, ex.levelKind);
+  const scoreByDate = new Map(workoutScores(sets, ex.type, ex.levelKind).map(p => [p.date, p.score]));
   const dates = [...byDate.keys()].sort().reverse();
   const PAGE = 60;
   let shown = 0;
@@ -1284,7 +1312,8 @@ async function renderHistoryTab(body, ex) {
     shown += chunk.length;
     list.insertAdjacentHTML('beforeend', chunk.map(date => `
       <div class="history-day" data-date="${date}">
-        <div class="history-date">${esc(fmtDateLong(date))}</div>
+        <div class="history-date">${esc(fmtDateLong(date))}${scoreByDate.has(date)
+          ? `<span class="history-score">Score ${esc(scoreDisplay(info, scoreByDate.get(date)).text)}</span>` : ''}</div>
         ${byDate.get(date).map((s, i) => {
           const [a, b] = describeCols(s, ex);
           return `
@@ -1312,6 +1341,7 @@ async function renderHistoryTab(body, ex) {
 
 const GRAPH_METRICS = {
   weight_reps: [
+    ['score', 'Score'],
     ['maxWeight', 'Max Weight'],
     ['e1rm', 'Est. 1RM'],
     ['volume', 'Volume'],
@@ -1319,17 +1349,20 @@ const GRAPH_METRICS = {
     ['totalReps', 'Total Reps'],
   ],
   distance_time: [
+    ['score', 'Score'],
     ['distance', 'Distance'],
     ['totalTime', 'Total Time'],
     ['maxTime', 'Max Time'],
     ['pace', 'Pace'],
   ],
   level_reps: [
+    ['score', 'Score'],
     ['maxReps', 'Max Reps'],
     ['totalReps', 'Total Reps'],
     ['maxLevel', 'Max Level'],
   ],
   level_time: [
+    ['score', 'Score'],
     ['totalTime', 'Total Time'],
     ['maxTime', 'Max Time'],
     ['maxLevel', 'Max Level'],
@@ -1357,8 +1390,13 @@ async function renderGraphTab(body, ex) {
     byDate.get(s.date).push(s);
   }
 
+  const info = scoreInfo(sets, ex.type, ex.levelKind);
   const agg = (daySets, metric) => {
     switch (metric) {
+      case 'score': {
+        const best = Math.max(0, ...daySets.map(s => info.scoreOf(s) || 0));
+        return best > 0 ? scoreDisplay(info, best).value : 0;
+      }
       case 'maxWeight': return kgToDisplay(Math.max(...daySets.map(s => s.weight)));
       case 'e1rm': return kgToDisplay(Math.max(...daySets.map(s => est1RM(s.weight, s.reps))));
       case 'volume': return kgToDisplay(daySets.reduce((a, s) => a + s.weight * s.reps, 0));
@@ -1398,6 +1436,7 @@ async function renderGraphTab(body, ex) {
   }
 
   const unitFor = {
+    score: scoreDisplay(info, 1).unit,
     maxWeight: getUnit(), e1rm: getUnit(), volume: getUnit(),
     maxReps: 'reps', totalReps: 'reps', maxLevel: '',
     distance: distUnitLabel(), totalTime: '', maxTime: '', pace: `min/${distUnitLabel()}`,
@@ -1450,7 +1489,8 @@ async function renderGraphTab(body, ex) {
     pref.trendWindow = parseInt(e.target.value, 10);
     renderGraphTab(body, ex);
   };
-  const isTimeMetric = pref.metric === 'totalTime' || pref.metric === 'maxTime';
+  const isTimeMetric = pref.metric === 'totalTime' || pref.metric === 'maxTime' ||
+    (pref.metric === 'score' && info.mode === 'time');
   renderLineChart(body.querySelector('#chart'), points, {
     trend,
     formatValue: isTimeMetric
