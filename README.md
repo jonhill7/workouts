@@ -92,7 +92,7 @@ any prior CSV import), per-exercise notes, and routines.
   (green and orange dots) show a bar in the exercise list: green fill up to the
   best recent Score, a tick per recent workout (darker and taller = newer), a
   blue ▼ for the 12-month best and a red ▲ for the all-time best. The bar runs
-  from just below the lowest Score of the past year to the all-time best
+  from 50% of your all-time best Score to the all-time best
   The Score also appears beside each day on the History tab and is the
   default metric on the Graph tab (cardio graphs it as 5K-equivalent speed)
 - Per-exercise **History**, **Graph** (max weight, est. 1RM, volume, reps —

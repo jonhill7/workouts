@@ -224,22 +224,23 @@ export function workoutScores(sets, type, levelKind) {
 const dayDiff = (a, b) => Math.round((Date.parse(a + 'T00:00:00Z') - Date.parse(b + 'T00:00:00Z')) / 86_400_000);
 
 // Everything the exercise-list bar needs, positions as 0–100 (% of width).
-// The bar runs from just under the lowest score of the past 12 months to the
-// all-time best, so recent progress isn't squashed into the last few pixels.
+// The bar runs from BAR_FLOOR × the all-time best to the all-time best, so
+// every exercise's bar reads the same way ("I'm at 90% of my best") and the
+// scale doesn't shift as history changes. Scores below the floor sit at 0.
 //   fill    best score among workouts in the last `recentDays`
 //   ticks   one per recent workout, oldest first, with ageDays
 //   year    best score of the last 365 days; all: all-time best
 // Returns null when there's no recent scored workout.
+export const BAR_FLOOR = 0.5;
+
 export function scoreBar(scores, today, recentDays = 28) {
   const recent = scores.filter(p => dayDiff(today, p.date) <= recentDays);
   if (!recent.length) return null;
   const year = scores.filter(p => dayDiff(today, p.date) <= 365);
   const best = list => list.reduce((b, p) => (!b || p.score > b.score ? p : b), null);
   const all = best(scores), yearBest = best(year), recentBest = best(recent);
-  const yearMin = Math.min(...year.map(p => p.score));
-  const span = all.score - yearMin;
-  const lo = span > 0 ? Math.max(0, yearMin - span * 0.15) : 0;
-  const pos = v => (all.score > lo ? ((v - lo) / (all.score - lo)) * 100 : 100);
+  const lo = all.score * BAR_FLOOR;
+  const pos = v => Math.max(0, ((v - lo) / (all.score - lo)) * 100);
   return {
     lo, hi: all.score,
     fill: { ...recentBest, pos: pos(recentBest.score) },

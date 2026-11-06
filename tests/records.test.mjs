@@ -275,7 +275,8 @@ test('scoreBar: recent fill and ticks, 12-month and all-time bests', () => {
   ];
   const b = scoreBar(sc, '2026-11-06', 28);
   assert.equal(b.hi, 150);
-  assert.ok(Math.abs(b.lo - (100 - 50 * 0.15)) < 1e-9);
+  assert.equal(b.lo, 75); // 50% of the all-time best
+  assert.ok(Math.abs(b.fill.pos - 60) < 1e-9); // 120 is 60% of the way from 75 to 150
   assert.equal(b.fill.date, '2026-11-05');
   assert.deepEqual(b.ticks.map(t => t.ageDays), [17, 1]);
   assert.equal(b.year.date, '2026-06-01');
@@ -285,6 +286,8 @@ test('scoreBar: recent fill and ticks, 12-month and all-time bests', () => {
   assert.equal(scoreBar(sc.slice(0, 3), '2026-11-06', 28), null); // nothing recent
   // a single workout fills the whole bar
   assert.equal(scoreBar([{ date: '2026-11-05', score: 50 }], '2026-11-06').fill.pos, 100);
+  // a recent workout under half the all-time best sits at the left edge
+  assert.equal(scoreBar([{ date: '2025-01-01', score: 100 }, { date: '2026-11-05', score: 40 }], '2026-11-06').fill.pos, 0);
 });
 
 console.log(`${passed} tests passed`);
