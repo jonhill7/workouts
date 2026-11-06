@@ -2,7 +2,9 @@
 // Run: node tests/records.test.mjs
 import { strict as assert } from 'node:assert';
 import { KG_PER_LB, convertToLevel } from '../app/js/importer.js';
-import { computePRIds, repRecords, setCountRecords, splitWorkouts } from '../app/js/records.js';
+import {
+  computePRIds, repRecords, setCountRecords, splitWorkouts, workoutScores, scoreBar, riegelTime,
+} from '../app/js/records.js';
 
 let passed = 0;
 const test = (name, fn) => { fn(); passed++; console.log('  ✓', name); };
@@ -220,6 +222,69 @@ test('cardio PRs: longest distance ever; duration-only sets track time', () => {
   ];
   const prs = computePRIds(sets, 'distance_time');
   assert.deepEqual([...prs].sort(), [sets[1].id, sets[4].id].sort());
+});
+
+test('workoutScores weight_reps: best Epley 1RM per day, set count ignored', () => {
+  const sets = [
+    set('2024-01-01', 100, 1), set('2024-01-01', 90, 5), // 100, 105
+    set('2024-01-08', 75, 12),                          // 105
+    set('2024-01-15', 60, 5), set('2024-01-15', 60, 5), set('2024-01-15', 60, 5),
+  ];
+  const sc = workoutScores(sets, 'weight_reps');
+  assert.deepEqual(sc.map(p => p.date), ['2024-01-01', '2024-01-08', '2024-01-15']);
+  assert.ok(Math.abs(sc[0].score - 105) < 1e-9);
+  assert.ok(Math.abs(sc[1].score - 105) < 1e-9);
+  assert.ok(Math.abs(sc[2].score - 70) < 1e-9);
+  // never weighted → bodyweight, scored by reps
+  assert.deepEqual(workoutScores([set('2024-01-01', 0, 20), set('2024-01-02', 0, 25)], 'weight_reps')
+    .map(p => p.score), [20, 25]);
+});
+
+test('workoutScores distance_time: 5K-equivalent speed, faster scores higher', () => {
+  const run = (date, distance, time) => set(date, 0, 0, { distance, time });
+  const sc = workoutScores([
+    run('2024-02-01', 5000, 1500),  // 25:00 5K
+    run('2024-02-08', 10000, 3000), // 50:00 10K ≈ 24:00 5K
+    run('2024-02-15', 0, 7200),     // time only: no score once runs have both
+  ], 'distance_time');
+  assert.equal(sc.length, 2);
+  assert.ok(Math.abs(sc[0].score - 5000 / 1500) < 1e-9);
+  assert.ok(Math.abs(sc[1].score - 5000 / riegelTime(3000, 10000)) < 1e-9);
+  assert.ok(sc[1].score > sc[0].score);
+  assert.deepEqual(workoutScores([run('2024-03-01', 0, 600), run('2024-03-02', 0, 900)], 'distance_time')
+    .map(p => p.score), [600, 900]);
+});
+
+test('workoutScores level types: best set, resistance compares at the latest level', () => {
+  const lv = (date, level, reps, time = 0) => set(date, 0, reps, { level, time });
+  assert.deepEqual(workoutScores([lv('2024-04-01', 1, 20), lv('2024-04-01', 2, 25), lv('2024-04-02', 1, 22)], 'level_reps')
+    .map(p => p.score), [25, 22]);
+  const bike = [lv('2024-04-01', 8, 0, 1200), lv('2024-04-02', 10, 0, 600), lv('2024-04-03', 8, 0, 300),
+    lv('2024-04-03', 10, 0, 900)];
+  assert.deepEqual(workoutScores(bike, 'level_time', 'resistance'),
+    [{ date: '2024-04-02', score: 600 }, { date: '2024-04-03', score: 900 }]);
+});
+
+test('scoreBar: recent fill and ticks, 12-month and all-time bests', () => {
+  const sc = [
+    { date: '2023-01-01', score: 150 }, // all-time best, > 12 months ago
+    { date: '2026-03-01', score: 100 }, // 12-month low
+    { date: '2026-06-01', score: 130 }, // 12-month best
+    { date: '2026-10-20', score: 118 }, // recent
+    { date: '2026-11-05', score: 120 }, // recent best
+  ];
+  const b = scoreBar(sc, '2026-11-06', 28);
+  assert.equal(b.hi, 150);
+  assert.ok(Math.abs(b.lo - (100 - 50 * 0.15)) < 1e-9);
+  assert.equal(b.fill.date, '2026-11-05');
+  assert.deepEqual(b.ticks.map(t => t.ageDays), [17, 1]);
+  assert.equal(b.year.date, '2026-06-01');
+  assert.equal(b.all.date, '2023-01-01');
+  assert.equal(b.all.pos, 100);
+  assert.ok(b.ticks[0].pos < b.fill.pos && b.fill.pos < b.year.pos && b.year.pos < 100);
+  assert.equal(scoreBar(sc.slice(0, 3), '2026-11-06', 28), null); // nothing recent
+  // a single workout fills the whole bar
+  assert.equal(scoreBar([{ date: '2026-11-05', score: 50 }], '2026-11-06').fill.pos, 100);
 });
 
 console.log(`${passed} tests passed`);

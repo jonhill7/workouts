@@ -4,7 +4,7 @@ import {
   LEVEL_TYPES, LEVEL_SOURCES, DEFAULT_LEVEL_SOURCE, levelFromSet, convertToLevel,
 } from './importer.js';
 import { loadSqlJs, looksLikeSQLite, parseFitNotesDB } from './fitnotes-db.js';
-import { computePRIds, repRecords, setCountRecords } from './records.js';
+import { computePRIds, repRecords, setCountRecords, workoutScores, scoreBar, epley1RM } from './records.js';
 import * as exporter from './exporter.js';
 import { renderLineChart } from './charts.js';
 import {
@@ -197,11 +197,7 @@ function setRowHTML(s, ex, i, extra = '', isPR = false) {
     </div>`;
 }
 
-function est1RM(weightKg, reps) {
-  if (reps <= 0 || weightKg <= 0) return 0;
-  if (reps === 1) return weightKg;
-  return weightKg * (1 + reps / 30); // Epley
-}
+const est1RM = epley1RM; // shared with the workout Score in records.js
 
 // ---------------------------------------------------------------------------
 // Seed data (FitNotes-style defaults; imports merge by name)
@@ -580,17 +576,46 @@ async function openCalendar() {
 // ---------------------------------------------------------------------------
 // Exercise picker
 
-// Per-exercise usage: distinct workout days + most recent date.
-async function exerciseStatsMap() {
+// Per-exercise usage: distinct workout days + most recent date, plus the
+// Score bar (see scoreBar in records.js) for exercises done in the last
+// RECENT_DAYS — the green and orange ones.
+const RECENT_DAYS = 28;
+async function exerciseStatsMap(exercises = []) {
   const sets = await db.getAll('sets');
   const map = new Map();
   for (const s of sets) {
     let st = map.get(s.exerciseId);
-    if (!st) map.set(s.exerciseId, st = { days: new Set(), last: '' });
+    if (!st) map.set(s.exerciseId, st = { days: new Set(), last: '', sets: [] });
     st.days.add(s.date);
+    st.sets.push(s);
     if (s.date > st.last) st.last = s.date;
   }
+  const today = todayStr();
+  for (const ex of exercises) {
+    const st = map.get(ex.id);
+    if (!st || st.last < addDays(today, -RECENT_DAYS)) continue;
+    st.sets.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : (a.seq ?? 0) - (b.seq ?? 0)));
+    st.bar = scoreBar(workoutScores(st.sets, ex.type, ex.levelKind), today, RECENT_DAYS);
+  }
   return map;
+}
+
+// Bar from the lowest 12-month Score to the all-time best: green fill up to
+// the best recent workout, one tick per recent workout (darkest and tallest =
+// newest, fading and shrinking with age), a blue ▼ for the 12-month best and a red ▲ for all time.
+function scoreBarHTML(bar) {
+  const pct = v => `${Math.min(100, Math.max(0, v)).toFixed(1)}%`;
+  const ticks = bar.ticks.map(t => {
+    const fresh = 1 - Math.min(1, t.ageDays / RECENT_DAYS);
+    return `<span class="sb-tick" style="left:${pct(t.pos)};opacity:${(0.25 + 0.75 * fresh).toFixed(2)};height:${(6 + 6 * fresh).toFixed(1)}px"></span>`;
+  }).join('');
+  return `
+    <div class="score-bar" title="Green: best of last 4 weeks · ticks: recent workouts (darker = newer) · ▼ 12-month best (${esc(bar.year.date)}) · ▲ all-time best (${esc(bar.all.date)})">
+      <div class="sb-track"><div class="sb-fill" style="width:${pct(bar.fill.pos)}"></div></div>
+      ${ticks}
+      <span class="sb-year" style="left:${pct(bar.year.pos)}"></span>
+      <span class="sb-all" style="left:${pct(bar.all.pos)}"></span>
+    </div>`;
 }
 
 function recencyInfo(last) {
@@ -648,6 +673,7 @@ function exerciseRowHTML(e, st, hidden = false) {
       <div class="row-label">
         <div>${esc(e.name)}</div>
         <div class="row-stats">${stats}</div>
+        ${st?.bar ? scoreBarHTML(st.bar) : ''}
       </div>
       <button class="icon-btn" data-edit="${e.id}" aria-label="Edit ${esc(e.name)}">⋮</button>
     </div>`;
@@ -656,9 +682,8 @@ function exerciseRowHTML(e, st, hidden = false) {
 // FitNotes flow: + → category list → exercise list. Searching from the
 // category screen searches all exercises directly.
 async function renderExercisePicker() {
-  const [categories, exercises, stats] = await Promise.all([
-    allCategories(), allExercises(), exerciseStatsMap(),
-  ]);
+  const [categories, exercises] = await Promise.all([allCategories(), allExercises()]);
+  const stats = await exerciseStatsMap(exercises);
   const counts = new Map();
   for (const e of exercises) counts.set(e.categoryId, (counts.get(e.categoryId) || 0) + 1);
 
@@ -707,9 +732,8 @@ async function renderExercisePicker() {
 async function renderCategoryExercises(categoryId) {
   const cat = await db.get('categories', categoryId);
   if (!cat) { back(); return; }
-  const [exercises, stats] = await Promise.all([
-    db.getAllByIndex('exercises', 'categoryId', categoryId), exerciseStatsMap(),
-  ]);
+  const exercises = await db.getAllByIndex('exercises', 'categoryId', categoryId);
+  const stats = await exerciseStatsMap(exercises);
   const sorted = sortExercises(exercises, stats, S.exSort);
 
   $app().innerHTML = `

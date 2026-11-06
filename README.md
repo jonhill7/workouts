@@ -83,6 +83,16 @@ any prior CSV import), per-exercise notes, and routines.
   current streak — completions no more than 7 days apart, partials keep it
   alive — with a flame badge that glows brighter and hotter as the streak
   grows (up to a 50-streak)
+- **Workout Score bars**: every workout gets one Score per exercise, its best
+  single set (set count doesn't matter): estimated 1RM for weight × reps (most
+  reps if never weighted), a 5K-equivalent speed for distance/time (Riegel's
+  formula; longest distance or time when no set has both), most reps / longest
+  time in one set for set-numbered exercises, and best reps/time at the latest
+  workout's level for resistance levels. Exercises done in the last 4 weeks
+  (green and orange dots) show a bar in the exercise list: green fill up to the
+  best recent Score, a tick per recent workout (darker and taller = newer), a
+  blue ▼ for the 12-month best and a red ▲ for the all-time best. The bar runs
+  from just below the lowest Score of the past year to the all-time best
 - Per-exercise **History**, **Graph** (max weight, est. 1RM, volume, reps —
   or distance/time/pace for cardio; 3M/6M/1Y/All ranges), and **Records**
   (PRs, rep records table — a set counts toward its own rep count and every
