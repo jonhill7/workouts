@@ -626,7 +626,7 @@ async function exerciseStatsMap(exercises = []) {
   return map;
 }
 
-// Bar from the lowest 12-month Score to the all-time best: green fill up to
+// Bar from 50% of the all-time best Score to the all-time best: green fill up to
 // the best recent workout, one tick per recent workout (darkest and tallest =
 // newest, fading and shrinking with age), a blue ▼ for the 12-month best and a red ▲ for all time.
 function scoreBarHTML(bar) {
