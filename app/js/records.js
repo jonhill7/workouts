@@ -153,3 +153,98 @@ export function setCountRecords(sortedSets, type) {
   }
   return best;
 }
+
+// ---------------------------------------------------------------------------
+// Workout Score — one number per (exercise, workout day), higher is better,
+// so a day can be compared with any other day of the same exercise. It's the
+// day's best single set; the number of sets doesn't count.
+//
+//   weight × reps    best Epley estimated 1RM (kg). An exercise never logged
+//                    with weight (bodyweight) scores by most reps instead.
+//   distance / time  best 5 km-equivalent speed (m/s): each set's time is
+//                    scaled to 5 km with Riegel's race formula, so a fast
+//                    short run and a slow long one compare fairly. Without
+//                    any distance+time set it scores by longest distance,
+//                    then longest time.
+//   set # × reps     most reps (or longest time) in one set
+//   resistance level only days at the reference level — the highest level of
+//                    the latest workout — score, by best reps/time at it.
+//                    The app can't tell whether a higher level is harder,
+//                    so different levels aren't merged.
+//
+// Returns [{ date, score }] in date order, days without a score left out.
+
+export const EQUIV_DIST_M = 5000;
+const RIEGEL_EXP = 1.06;
+
+export function epley1RM(weightKg, reps) {
+  if (!(reps > 0) || !(weightKg > 0)) return 0;
+  return reps === 1 ? weightKg : weightKg * (1 + reps / 30); // Epley
+}
+
+export function riegelTime(timeSec, distM, targetM = EQUIV_DIST_M) {
+  if (!(timeSec > 0) || !(distM > 0)) return 0;
+  return timeSec * (targetM / distM) ** RIEGEL_EXP;
+}
+
+// How this exercise's history is scored: { mode, scoreOf, level }.
+// mode is the Score's unit: 'e1rm' (kg), 'speed' (5K-equivalent m/s),
+// 'distance' (m), 'time' (sec) or 'reps'. level is set for resistance
+// levels: only sets at that level score.
+export function scoreInfo(sets, type, levelKind) {
+  if (type === 'distance_time') {
+    if (sets.some(s => s.distance > 0 && s.time > 0)) {
+      return { mode: 'speed', scoreOf: s => { const t = riegelTime(s.time, s.distance); return t > 0 ? EQUIV_DIST_M / t : 0; } };
+    }
+    if (sets.some(s => s.distance > 0)) return { mode: 'distance', scoreOf: s => s.distance };
+    return { mode: 'time', scoreOf: s => s.time };
+  }
+  if (LEVEL_TYPES.has(type)) {
+    const valueOf = levelValueOf(type);
+    const mode = type === 'level_time' ? 'time' : 'reps';
+    if (levelKind !== 'resistance') return { mode, scoreOf: valueOf };
+    const lastDate = sets.reduce((d, s) => (valueOf(s) > 0 && s.date > d ? s.date : d), '');
+    const level = Math.max(0, ...sets.filter(s => s.date === lastDate && valueOf(s) > 0).map(s => s.level || 0));
+    return { mode, level, scoreOf: s => ((s.level || 0) === level ? valueOf(s) : 0) };
+  }
+  if (sets.some(s => s.weight > 0 && s.reps > 0)) return { mode: 'e1rm', scoreOf: s => epley1RM(s.weight, s.reps) };
+  return { mode: 'reps', scoreOf: s => s.reps };
+}
+
+export function workoutScores(sets, type, levelKind) {
+  const { scoreOf } = scoreInfo(sets, type, levelKind);
+  const byDate = new Map();
+  for (const s of sets) {
+    const v = scoreOf(s) || 0;
+    if (v > (byDate.get(s.date) || 0)) byDate.set(s.date, v);
+  }
+  return [...byDate.keys()].sort().map(date => ({ date, score: byDate.get(date) }));
+}
+
+const dayDiff = (a, b) => Math.round((Date.parse(a + 'T00:00:00Z') - Date.parse(b + 'T00:00:00Z')) / 86_400_000);
+
+// Everything the exercise-list bar needs, positions as 0–100 (% of width).
+// The bar runs from just under the lowest score of the past 12 months to the
+// all-time best, so recent progress isn't squashed into the last few pixels.
+//   fill    best score among workouts in the last `recentDays`
+//   ticks   one per recent workout, oldest first, with ageDays
+//   year    best score of the last 365 days; all: all-time best
+// Returns null when there's no recent scored workout.
+export function scoreBar(scores, today, recentDays = 28) {
+  const recent = scores.filter(p => dayDiff(today, p.date) <= recentDays);
+  if (!recent.length) return null;
+  const year = scores.filter(p => dayDiff(today, p.date) <= 365);
+  const best = list => list.reduce((b, p) => (!b || p.score > b.score ? p : b), null);
+  const all = best(scores), yearBest = best(year), recentBest = best(recent);
+  const yearMin = Math.min(...year.map(p => p.score));
+  const span = all.score - yearMin;
+  const lo = span > 0 ? Math.max(0, yearMin - span * 0.15) : 0;
+  const pos = v => (all.score > lo ? ((v - lo) / (all.score - lo)) * 100 : 100);
+  return {
+    lo, hi: all.score,
+    fill: { ...recentBest, pos: pos(recentBest.score) },
+    ticks: recent.map(p => ({ ...p, pos: pos(p.score), ageDays: dayDiff(today, p.date) })),
+    year: { ...yearBest, pos: pos(yearBest.score) },
+    all: { ...all, pos: 100 },
+  };
+}

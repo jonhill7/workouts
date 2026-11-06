@@ -4,7 +4,9 @@ import {
   LEVEL_TYPES, LEVEL_SOURCES, DEFAULT_LEVEL_SOURCE, levelFromSet, convertToLevel,
 } from './importer.js';
 import { loadSqlJs, looksLikeSQLite, parseFitNotesDB } from './fitnotes-db.js';
-import { computePRIds, repRecords, setCountRecords } from './records.js';
+import {
+  computePRIds, repRecords, setCountRecords, workoutScores, scoreBar, scoreInfo, epley1RM, EQUIV_DIST_M,
+} from './records.js';
 import * as exporter from './exporter.js';
 import { renderLineChart } from './charts.js';
 import {
@@ -197,10 +199,30 @@ function setRowHTML(s, ex, i, extra = '', isPR = false) {
     </div>`;
 }
 
-function est1RM(weightKg, reps) {
-  if (reps <= 0 || weightKg <= 0) return 0;
-  if (reps === 1) return weightKg;
-  return weightKg * (1 + reps / 30); // Epley
+const est1RM = epley1RM; // shared with the workout Score in records.js
+
+// A workout Score (see scoreInfo in records.js) in display units: `value`
+// for graphing (higher is better; time in minutes), `text` for labels, and
+// `unit` for the graph title.
+function scoreDisplay(info, score) {
+  switch (info.mode) {
+    case 'e1rm': {
+      const v = kgToDisplay(score);
+      return { value: v, text: `${fmtNum(v, 1)} ${getUnit()}`, unit: `est. 1RM, ${getUnit()}` };
+    }
+    case 'speed': {
+      const v = mToDisplayDist(score * 3600);
+      const unit = isMetric() ? 'km/h' : 'mph';
+      return { value: v, text: `${fmtNum(v, 1)} ${unit} (5K in ${timeToString(EQUIV_DIST_M / score)})`,
+        unit: `5K-equivalent speed, ${unit}` };
+    }
+    case 'distance': {
+      const v = mToDisplayDist(score);
+      return { value: v, text: `${fmtNum(v)} ${distUnitLabel()}`, unit: distUnitLabel() };
+    }
+    case 'time': return { value: score / 60, text: timeToString(score), unit: info.level ? `level ${info.level}` : '' };
+    default: return { value: score, text: `${score} reps`, unit: info.level ? `reps at level ${info.level}` : 'reps' };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -580,17 +602,46 @@ async function openCalendar() {
 // ---------------------------------------------------------------------------
 // Exercise picker
 
-// Per-exercise usage: distinct workout days + most recent date.
-async function exerciseStatsMap() {
+// Per-exercise usage: distinct workout days + most recent date, plus the
+// Score bar (see scoreBar in records.js) for exercises done in the last
+// RECENT_DAYS — the green and orange ones.
+const RECENT_DAYS = 28;
+async function exerciseStatsMap(exercises = []) {
   const sets = await db.getAll('sets');
   const map = new Map();
   for (const s of sets) {
     let st = map.get(s.exerciseId);
-    if (!st) map.set(s.exerciseId, st = { days: new Set(), last: '' });
+    if (!st) map.set(s.exerciseId, st = { days: new Set(), last: '', sets: [] });
     st.days.add(s.date);
+    st.sets.push(s);
     if (s.date > st.last) st.last = s.date;
   }
+  const today = todayStr();
+  for (const ex of exercises) {
+    const st = map.get(ex.id);
+    if (!st || st.last < addDays(today, -RECENT_DAYS)) continue;
+    st.sets.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : (a.seq ?? 0) - (b.seq ?? 0)));
+    st.bar = scoreBar(workoutScores(st.sets, ex.type, ex.levelKind), today, RECENT_DAYS);
+  }
   return map;
+}
+
+// Bar from the lowest 12-month Score to the all-time best: green fill up to
+// the best recent workout, one tick per recent workout (darkest and tallest =
+// newest, fading and shrinking with age), a blue ▼ for the 12-month best and a red ▲ for all time.
+function scoreBarHTML(bar) {
+  const pct = v => `${Math.min(100, Math.max(0, v)).toFixed(1)}%`;
+  const ticks = bar.ticks.map(t => {
+    const fresh = 1 - Math.min(1, t.ageDays / RECENT_DAYS);
+    return `<span class="sb-tick" style="left:${pct(t.pos)};opacity:${(0.25 + 0.75 * fresh).toFixed(2)};height:${(6 + 6 * fresh).toFixed(1)}px"></span>`;
+  }).join('');
+  return `
+    <div class="score-bar" title="Green: best of last 4 weeks · ticks: recent workouts (darker = newer) · ▼ 12-month best (${esc(bar.year.date)}) · ▲ all-time best (${esc(bar.all.date)})">
+      <div class="sb-track"><div class="sb-fill" style="width:${pct(bar.fill.pos)}"></div></div>
+      ${ticks}
+      <span class="sb-year" style="left:${pct(bar.year.pos)}"></span>
+      <span class="sb-all" style="left:${pct(bar.all.pos)}"></span>
+    </div>`;
 }
 
 function recencyInfo(last) {
@@ -648,6 +699,7 @@ function exerciseRowHTML(e, st, hidden = false) {
       <div class="row-label">
         <div>${esc(e.name)}</div>
         <div class="row-stats">${stats}</div>
+        ${st?.bar ? scoreBarHTML(st.bar) : ''}
       </div>
       <button class="icon-btn" data-edit="${e.id}" aria-label="Edit ${esc(e.name)}">⋮</button>
     </div>`;
@@ -656,9 +708,8 @@ function exerciseRowHTML(e, st, hidden = false) {
 // FitNotes flow: + → category list → exercise list. Searching from the
 // category screen searches all exercises directly.
 async function renderExercisePicker() {
-  const [categories, exercises, stats] = await Promise.all([
-    allCategories(), allExercises(), exerciseStatsMap(),
-  ]);
+  const [categories, exercises] = await Promise.all([allCategories(), allExercises()]);
+  const stats = await exerciseStatsMap(exercises);
   const counts = new Map();
   for (const e of exercises) counts.set(e.categoryId, (counts.get(e.categoryId) || 0) + 1);
 
@@ -707,9 +758,8 @@ async function renderExercisePicker() {
 async function renderCategoryExercises(categoryId) {
   const cat = await db.get('categories', categoryId);
   if (!cat) { back(); return; }
-  const [exercises, stats] = await Promise.all([
-    db.getAllByIndex('exercises', 'categoryId', categoryId), exerciseStatsMap(),
-  ]);
+  const exercises = await db.getAllByIndex('exercises', 'categoryId', categoryId);
+  const stats = await exerciseStatsMap(exercises);
   const sorted = sortExercises(exercises, stats, S.exSort);
 
   $app().innerHTML = `
@@ -1247,6 +1297,8 @@ async function renderHistoryTab(body, ex) {
     if (!byDate.has(s.date)) byDate.set(s.date, []);
     byDate.get(s.date).push(s);
   }
+  const info = scoreInfo(sets, ex.type, ex.levelKind);
+  const scoreByDate = new Map(workoutScores(sets, ex.type, ex.levelKind).map(p => [p.date, p.score]));
   const dates = [...byDate.keys()].sort().reverse();
   const PAGE = 60;
   let shown = 0;
@@ -1260,7 +1312,8 @@ async function renderHistoryTab(body, ex) {
     shown += chunk.length;
     list.insertAdjacentHTML('beforeend', chunk.map(date => `
       <div class="history-day" data-date="${date}">
-        <div class="history-date">${esc(fmtDateLong(date))}</div>
+        <div class="history-date">${esc(fmtDateLong(date))}${scoreByDate.has(date)
+          ? `<span class="history-score">Score ${esc(scoreDisplay(info, scoreByDate.get(date)).text)}</span>` : ''}</div>
         ${byDate.get(date).map((s, i) => {
           const [a, b] = describeCols(s, ex);
           return `
@@ -1288,6 +1341,7 @@ async function renderHistoryTab(body, ex) {
 
 const GRAPH_METRICS = {
   weight_reps: [
+    ['score', 'Score'],
     ['maxWeight', 'Max Weight'],
     ['e1rm', 'Est. 1RM'],
     ['volume', 'Volume'],
@@ -1295,17 +1349,20 @@ const GRAPH_METRICS = {
     ['totalReps', 'Total Reps'],
   ],
   distance_time: [
+    ['score', 'Score'],
     ['distance', 'Distance'],
     ['totalTime', 'Total Time'],
     ['maxTime', 'Max Time'],
     ['pace', 'Pace'],
   ],
   level_reps: [
+    ['score', 'Score'],
     ['maxReps', 'Max Reps'],
     ['totalReps', 'Total Reps'],
     ['maxLevel', 'Max Level'],
   ],
   level_time: [
+    ['score', 'Score'],
     ['totalTime', 'Total Time'],
     ['maxTime', 'Max Time'],
     ['maxLevel', 'Max Level'],
@@ -1333,8 +1390,13 @@ async function renderGraphTab(body, ex) {
     byDate.get(s.date).push(s);
   }
 
+  const info = scoreInfo(sets, ex.type, ex.levelKind);
   const agg = (daySets, metric) => {
     switch (metric) {
+      case 'score': {
+        const best = Math.max(0, ...daySets.map(s => info.scoreOf(s) || 0));
+        return best > 0 ? scoreDisplay(info, best).value : 0;
+      }
       case 'maxWeight': return kgToDisplay(Math.max(...daySets.map(s => s.weight)));
       case 'e1rm': return kgToDisplay(Math.max(...daySets.map(s => est1RM(s.weight, s.reps))));
       case 'volume': return kgToDisplay(daySets.reduce((a, s) => a + s.weight * s.reps, 0));
@@ -1374,6 +1436,7 @@ async function renderGraphTab(body, ex) {
   }
 
   const unitFor = {
+    score: scoreDisplay(info, 1).unit,
     maxWeight: getUnit(), e1rm: getUnit(), volume: getUnit(),
     maxReps: 'reps', totalReps: 'reps', maxLevel: '',
     distance: distUnitLabel(), totalTime: '', maxTime: '', pace: `min/${distUnitLabel()}`,
@@ -1426,7 +1489,8 @@ async function renderGraphTab(body, ex) {
     pref.trendWindow = parseInt(e.target.value, 10);
     renderGraphTab(body, ex);
   };
-  const isTimeMetric = pref.metric === 'totalTime' || pref.metric === 'maxTime';
+  const isTimeMetric = pref.metric === 'totalTime' || pref.metric === 'maxTime' ||
+    (pref.metric === 'score' && info.mode === 'time');
   renderLineChart(body.querySelector('#chart'), points, {
     trend,
     formatValue: isTimeMetric
