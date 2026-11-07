@@ -167,10 +167,9 @@ export function setCountRecords(sortedSets, type) {
 //                    any distance+time set it scores by longest distance,
 //                    then longest time.
 //   set # × reps     most reps (or longest time) in one set
-//   resistance level only days at the reference level — the highest level of
-//                    the latest workout — score, by best reps/time at it.
-//                    The app can't tell whether a higher level is harder,
-//                    so different levels aren't merged.
+//   resistance level best level × minutes (or level × reps) in one set, so
+//                    harder levels count for more. Assumes a higher level is
+//                    harder, as on machines (elliptical, bike).
 //
 // Returns [{ date, score }] in date order, days without a score left out.
 
@@ -187,10 +186,10 @@ export function riegelTime(timeSec, distM, targetM = EQUIV_DIST_M) {
   return timeSec * (targetM / distM) ** RIEGEL_EXP;
 }
 
-// How this exercise's history is scored: { mode, scoreOf, level }.
+// How this exercise's history is scored: { mode, scoreOf }.
 // mode is the Score's unit: 'e1rm' (kg), 'speed' (5K-equivalent m/s),
-// 'distance' (m), 'time' (sec) or 'reps'. level is set for resistance
-// levels: only sets at that level score.
+// 'distance' (m), 'time' (sec), 'reps', or for resistance levels
+// 'levelTime' (level × minutes) / 'levelReps' (level × reps).
 export function scoreInfo(sets, type, levelKind) {
   if (type === 'distance_time') {
     if (sets.some(s => s.distance > 0 && s.time > 0)) {
@@ -203,9 +202,8 @@ export function scoreInfo(sets, type, levelKind) {
     const valueOf = levelValueOf(type);
     const mode = type === 'level_time' ? 'time' : 'reps';
     if (levelKind !== 'resistance') return { mode, scoreOf: valueOf };
-    const lastDate = sets.reduce((d, s) => (valueOf(s) > 0 && s.date > d ? s.date : d), '');
-    const level = Math.max(0, ...sets.filter(s => s.date === lastDate && valueOf(s) > 0).map(s => s.level || 0));
-    return { mode, level, scoreOf: s => ((s.level || 0) === level ? valueOf(s) : 0) };
+    if (type === 'level_time') return { mode: 'levelTime', scoreOf: s => ((s.level || 0) * s.time) / 60 };
+    return { mode: 'levelReps', scoreOf: s => (s.level || 0) * s.reps };
   }
   if (sets.some(s => s.weight > 0 && s.reps > 0)) return { mode: 'e1rm', scoreOf: s => epley1RM(s.weight, s.reps) };
   return { mode: 'reps', scoreOf: s => s.reps };
