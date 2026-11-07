@@ -255,14 +255,19 @@ test('workoutScores distance_time: 5K-equivalent speed, faster scores higher', (
     .map(p => p.score), [600, 900]);
 });
 
-test('workoutScores level types: best set, resistance compares at the latest level', () => {
+test('workoutScores level types: best set, resistance scores level × minutes / reps', () => {
   const lv = (date, level, reps, time = 0) => set(date, 0, reps, { level, time });
   assert.deepEqual(workoutScores([lv('2024-04-01', 1, 20), lv('2024-04-01', 2, 25), lv('2024-04-02', 1, 22)], 'level_reps')
     .map(p => p.score), [25, 22]);
   const bike = [lv('2024-04-01', 8, 0, 1200), lv('2024-04-02', 10, 0, 600), lv('2024-04-03', 8, 0, 300),
     lv('2024-04-03', 10, 0, 900)];
-  assert.deepEqual(workoutScores(bike, 'level_time', 'resistance'),
-    [{ date: '2024-04-02', score: 600 }, { date: '2024-04-03', score: 900 }]);
+  // every day scores, whatever its level: 8 × 20 min, 10 × 10 min, max(8 × 5, 10 × 15)
+  assert.deepEqual(workoutScores(bike, 'level_time', 'resistance').map(p => p.score), [160, 100, 150]);
+  // 60 min at level 10 beats 30 min at level 5
+  assert.ok(workoutScores([lv('2022-05-19', 10, 0, 3600), lv('2026-11-06', 5, 0, 1800)], 'level_time', 'resistance')
+    .map(p => p.score).join() === '600,150');
+  const bands = [lv('2024-05-01', 3, 20), lv('2024-05-02', 2, 40)];
+  assert.deepEqual(workoutScores(bands, 'level_reps', 'resistance').map(p => p.score), [60, 80]);
 });
 
 test('scoreBar: recent fill and ticks, 12-month and all-time bests', () => {

@@ -220,8 +220,10 @@ function scoreDisplay(info, score) {
       const v = mToDisplayDist(score);
       return { value: v, text: `${fmtNum(v)} ${distUnitLabel()}`, unit: distUnitLabel() };
     }
-    case 'time': return { value: score / 60, text: timeToString(score), unit: info.level ? `level ${info.level}` : '' };
-    default: return { value: score, text: `${score} reps`, unit: info.level ? `reps at level ${info.level}` : 'reps' };
+    case 'time': return { value: score / 60, text: timeToString(score), unit: '' };
+    case 'levelTime': return { value: score, text: `${fmtNum(score, 0)} (level × min)`, unit: 'level × minutes' };
+    case 'levelReps': return { value: score, text: `${score} (level × reps)`, unit: 'level × reps' };
+    default: return { value: score, text: `${score} reps`, unit: 'reps' };
   }
 }
 

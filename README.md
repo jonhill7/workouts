@@ -87,8 +87,8 @@ any prior CSV import), per-exercise notes, and routines.
   single set (set count doesn't matter): estimated 1RM for weight × reps (most
   reps if never weighted), a 5K-equivalent speed for distance/time (Riegel's
   formula; longest distance or time when no set has both), most reps / longest
-  time in one set for set-numbered exercises, and best reps/time at the latest
-  workout's level for resistance levels. Exercises done in the last 4 weeks
+  time in one set for set-numbered exercises, and level × minutes (or level ×
+  reps) for resistance levels, assuming a higher level is harder. Exercises done in the last 4 weeks
   (green and orange dots) show a bar in the exercise list: green fill up to the
   best recent Score, a tick per recent workout (darker and taller = newer), a
   blue ▼ for the 12-month best and a red ▲ for the all-time best. The bar runs
