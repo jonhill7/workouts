@@ -299,6 +299,14 @@ test('scoreBar: recent fill and ticks, 12-month and all-time bests', () => {
   // a single workout fills the whole bar
   assert.equal(scoreBar([{ date: '2026-11-05', score: 50 }], '2026-11-06').fill.pos, 100);
   assert.ok(!b.all.off && !b.year.off);
+  // layers rank recent workouts by score, not date: 3rd best, 2nd best, best
+  assert.deepEqual(b.layers.map(Math.round), [57, 57, 60]); // only 2 recent: 118 repeats
+  const lay = scoreBar([
+    { date: '2025-01-01', score: 200 },
+    { date: '2026-10-12', score: 160 }, { date: '2026-10-20', score: 190 },
+    { date: '2026-10-28', score: 150 }, { date: '2026-11-05', score: 170 },
+  ], '2026-11-06').layers;
+  assert.deepEqual(lay, [60, 70, 90]); // 160, 170, 190 on a 100–200 bar; the newest (170) isn't the best
   // a low recent best slides the window down (same length) so it sits 25% along;
   // the all-time best goes off the right edge, older recent workouts pin at 0
   const ell = scoreBar([

@@ -242,6 +242,9 @@ const dayDiff = (a, b) => Math.round((Date.parse(a + 'T00:00:00Z') - Date.parse(
 // BAR_MIN_FILL of the way along, and the all-time best goes off the right
 // edge (all.off). Recent workouts below the window sit at 0.
 //   fill    best score among workouts in the last `recentDays`
+//   layers  positions of the 3rd-best, 2nd-best and best recent scores (by
+//           score, not date; repeats when there are fewer than 3 workouts),
+//           for the solid / medium / light green segments
 //   ticks   one per recent workout, oldest first, with ageDays
 //   year    best score of the last 365 days (off when past the right edge)
 //   all     all-time best
@@ -260,9 +263,12 @@ export function scoreBar(scores, today, recentDays = 28) {
   const hi = lo + span;
   const pos = v => Math.max(0, ((v - lo) / span) * 100);
   const yearPos = pos(yearBest.score);
+  const top = recent.map(p => p.score).sort((a, b) => b - a);
+  const nth = i => pos(top[Math.min(i, top.length - 1)]);
   return {
     lo, hi,
     fill: { ...recentBest, pos: pos(recentBest.score) },
+    layers: [nth(2), nth(1), nth(0)],
     ticks: recent.map(p => ({ ...p, pos: pos(p.score), ageDays: dayDiff(today, p.date) })),
     year: { ...yearBest, pos: Math.min(100, yearPos), off: yearPos > 100 + 1e-9 },
     all: { ...all, pos: 100, off: all.score > hi + 1e-9 },
