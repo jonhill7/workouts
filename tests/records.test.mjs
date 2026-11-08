@@ -3,7 +3,7 @@
 import { strict as assert } from 'node:assert';
 import { KG_PER_LB, convertToLevel } from '../app/js/importer.js';
 import {
-  computePRIds, repRecords, setCountRecords, splitWorkouts, workoutScores, scoreBar, riegelTime,
+  computePRIds, repRecords, setCountRecords, splitWorkouts, workoutScores, dayScore, scoreBar, riegelTime, epley1RM,
 } from '../app/js/records.js';
 
 let passed = 0;
@@ -224,17 +224,24 @@ test('cardio PRs: longest distance ever; duration-only sets track time', () => {
   assert.deepEqual([...prs].sort(), [sets[1].id, sets[4].id].sort());
 });
 
-test('workoutScores weight_reps: best Epley 1RM per day, set count ignored', () => {
+test('workoutScores weight_reps: Epley 1RMs best first, weighted 1, ½, ¼ …', () => {
   const sets = [
-    set('2024-01-01', 100, 1), set('2024-01-01', 90, 5), // 100, 105
+    set('2024-01-01', 100, 1), set('2024-01-01', 90, 5), // 100, 105 → 105 + 50
     set('2024-01-08', 75, 12),                          // 105
-    set('2024-01-15', 60, 5), set('2024-01-15', 60, 5), set('2024-01-15', 60, 5),
+    set('2024-01-15', 60, 5), set('2024-01-15', 60, 5), set('2024-01-15', 60, 5), // 70 × 1.75
   ];
   const sc = workoutScores(sets, 'weight_reps');
   assert.deepEqual(sc.map(p => p.date), ['2024-01-01', '2024-01-08', '2024-01-15']);
-  assert.ok(Math.abs(sc[0].score - 105) < 1e-9);
+  assert.ok(Math.abs(sc[0].score - 155) < 1e-9);
   assert.ok(Math.abs(sc[1].score - 105) < 1e-9);
-  assert.ok(Math.abs(sc[2].score - 70) < 1e-9);
+  assert.ok(Math.abs(sc[2].score - 122.5) < 1e-9);
+  // 8 + 8 beats 8 + 7; an extra (warm-up) set never lowers the score
+  const day = (date, ...reps) => reps.map(r => set(date, 100, r));
+  const [a, b, c] = workoutScores([...day('2024-02-01', 8, 7), ...day('2024-02-02', 8, 8),
+    ...day('2024-02-03', 8, 8), set('2024-02-03', 40, 10)], 'weight_reps').map(p => p.score);
+  assert.ok(b > a && c > b);
+  assert.ok(c < 2 * epley1RM(100, 8)); // capped at twice the best set
+  assert.ok(Math.abs(dayScore(day('x', 5, 5, 5), s => s.reps) - 8.75) < 1e-9);
   // never weighted → bodyweight, scored by reps
   assert.deepEqual(workoutScores([set('2024-01-01', 0, 20), set('2024-01-02', 0, 25)], 'weight_reps')
     .map(p => p.score), [20, 25]);
@@ -255,14 +262,14 @@ test('workoutScores distance_time: 5K-equivalent speed, faster scores higher', (
     .map(p => p.score), [600, 900]);
 });
 
-test('workoutScores level types: best set, resistance scores level × minutes / reps', () => {
+test('workoutScores level types: set scores, resistance scores level × minutes / reps', () => {
   const lv = (date, level, reps, time = 0) => set(date, 0, reps, { level, time });
   assert.deepEqual(workoutScores([lv('2024-04-01', 1, 20), lv('2024-04-01', 2, 25), lv('2024-04-02', 1, 22)], 'level_reps')
-    .map(p => p.score), [25, 22]);
+    .map(p => p.score), [35, 22]);
   const bike = [lv('2024-04-01', 8, 0, 1200), lv('2024-04-02', 10, 0, 600), lv('2024-04-03', 8, 0, 300),
     lv('2024-04-03', 10, 0, 900)];
-  // every day scores, whatever its level: 8 × 20 min, 10 × 10 min, max(8 × 5, 10 × 15)
-  assert.deepEqual(workoutScores(bike, 'level_time', 'resistance').map(p => p.score), [160, 100, 150]);
+  // every day scores, whatever its level: 8 × 20 min, 10 × 10 min, 10 × 15 + ½ × 8 × 5
+  assert.deepEqual(workoutScores(bike, 'level_time', 'resistance').map(p => p.score), [160, 100, 170]);
   // 60 min at level 10 beats 30 min at level 5
   assert.ok(workoutScores([lv('2022-05-19', 10, 0, 3600), lv('2026-11-06', 5, 0, 1800)], 'level_time', 'resistance')
     .map(p => p.score).join() === '600,150');
@@ -291,8 +298,23 @@ test('scoreBar: recent fill and ticks, 12-month and all-time bests', () => {
   assert.equal(scoreBar(sc.slice(0, 3), '2026-11-06', 28), null); // nothing recent
   // a single workout fills the whole bar
   assert.equal(scoreBar([{ date: '2026-11-05', score: 50 }], '2026-11-06').fill.pos, 100);
-  // a recent workout under half the all-time best sits at the left edge
-  assert.equal(scoreBar([{ date: '2025-01-01', score: 100 }, { date: '2026-11-05', score: 40 }], '2026-11-06').fill.pos, 0);
+  assert.ok(!b.all.off && !b.year.off);
+  // a low recent best slides the window down (same length) so it sits 25% along;
+  // the all-time best goes off the right edge, older recent workouts pin at 0
+  const ell = scoreBar([
+    { date: '2022-05-19', score: 600 }, // level 10 × 60 min
+    { date: '2026-10-15', score: 100 },
+    { date: '2026-11-05', score: 300 }, // level 10 × 30 min
+  ], '2026-11-06');
+  assert.equal(ell.hi - ell.lo, 300);
+  assert.equal(ell.lo, 225);
+  assert.ok(Math.abs(ell.fill.pos - 25) < 1e-9);
+  assert.deepEqual(ell.ticks.map(t => t.pos), [0, 25]);
+  assert.ok(ell.all.off);
+  // the window starts sliding only once the best recent workout is below 62.5%
+  assert.equal(scoreBar([{ date: '2025-01-01', score: 100 }, { date: '2026-11-05', score: 70 }], '2026-11-06').lo, 50);
+  const edge = scoreBar([{ date: '2025-01-01', score: 100 }, { date: '2026-11-05', score: 60 }], '2026-11-06');
+  assert.ok(Math.abs(edge.lo - 47.5) < 1e-9 && edge.all.off);
 });
 
 console.log(`${passed} tests passed`);

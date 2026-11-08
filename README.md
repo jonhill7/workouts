@@ -83,18 +83,23 @@ any prior CSV import), per-exercise notes, and routines.
   current streak — completions no more than 7 days apart, partials keep it
   alive — with a flame badge that glows brighter and hotter as the streak
   grows (up to a 50-streak)
-- **Workout Score bars**: every workout gets one Score per exercise, its best
-  single set (set count doesn't matter): estimated 1RM for weight × reps (most
-  reps if never weighted), a 5K-equivalent speed for distance/time (Riegel's
-  formula; longest distance or time when no set has both), most reps / longest
-  time in one set for set-numbered exercises, and level × minutes (or level ×
-  reps) for resistance levels, assuming a higher level is harder. Exercises done in the last 4 weeks
-  (green and orange dots) show a bar in the exercise list: green fill up to the
-  best recent Score, a tick per recent workout (darker and taller = newer), a
-  blue ▼ for the 12-month best and a red ▲ for the all-time best. The bar runs
-  from 50% of your all-time best Score to the all-time best
-  The Score also appears beside each day on the History tab and is the
-  default metric on the Graph tab (cardio graphs it as 5K-equivalent speed)
+- **Workout Score bars**: every workout gets one Score per exercise that
+  counts every set: each set gets a set score, and the day's set scores are
+  added best first with halving weights (1 × best + ½ × 2nd + ¼ × 3rd …), so
+  8 + 8 reps beats 8 + 7, an extra set never lowers the Score, and the total
+  can't pass twice the best set. Set scores: estimated 1RM for weight × reps
+  (reps if never weighted), a 5K-equivalent speed for distance/time (Riegel's
+  formula; distance or time when no set has both), reps / time for
+  set-numbered exercises, and level × minutes (or level × reps) for resistance
+  levels, assuming a higher level is harder. Scores are shown as points.
+  Exercises done in the last 4 weeks (green and orange dots) show a bar in the
+  exercise list: green fill up to the best recent Score, a tick per recent
+  workout (darker and taller = newer), a blue ▼ for the 12-month best and a
+  red ▲ for the all-time best. The bar always spans half your all-time best:
+  normally 50% → 100%, but when your best recent workout is lower, the window
+  slides down until it sits a quarter of the way along, and the all-time best
+  becomes a red ▶ off the right end. The Score also appears beside each day on
+  the History tab and is the default metric on the Graph tab
 - Per-exercise **History**, **Graph** (max weight, est. 1RM, volume, reps —
   or distance/time/pace for cardio; 3M/6M/1Y/All ranges), and **Records**
   (PRs, rep records table — a set counts toward its own rep count and every
