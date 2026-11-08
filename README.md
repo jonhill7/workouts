@@ -93,8 +93,10 @@ any prior CSV import), per-exercise notes, and routines.
   set-numbered exercises, and level × minutes (or level × reps) for resistance
   levels, assuming a higher level is harder. Scores are shown as points.
   Exercises done in the last 4 weeks (green and orange dots) show a bar in the
-  exercise list: green fill up to the best recent Score, a tick per recent
-  workout (darker and taller = newer), a blue ▼ for the 12-month best and a
+  exercise list: green shading by score rank among the last 4 weeks'
+  workouts (solid up to the 3rd best, medium up to the 2nd best, light up to
+  the best, whenever they happened), a tick per recent workout (darker,
+  taller and thicker = newer), a blue ▼ for the 12-month best and a
   red ▲ for the all-time best. The bar always spans half your all-time best:
   normally 50% → 100%, but when your best recent workout is lower, the window
   slides down until it sits a quarter of the way along, and the all-time best

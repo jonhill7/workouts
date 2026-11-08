@@ -619,26 +619,33 @@ async function exerciseStatsMap(exercises = []) {
   return map;
 }
 
-// Bar spanning half the all-time best Score (see scoreBar): green fill up to
-// the best recent workout, one tick per recent workout (darkest and tallest =
-// newest, fading and shrinking with age), a blue ▼ for the 12-month best and a
-// red ▲ for all time. When the window has slid down to show a low recent
-// workout, the all-time best becomes a red ▶ past the right end (and an
+// Bar spanning half the all-time best Score (see scoreBar). Green shading by
+// score rank among recent workouts: solid up to the 3rd best, medium up to the
+// 2nd best, light up to the best. One tick per recent workout (newest darkest,
+// tallest and thickest; older ones shrink and fade), a blue ▼ for the 12-month
+// best and a red ▲ for all time. When the window has slid down to show a low
+// recent workout, the all-time best becomes a red ▶ past the right end (and an
 // off-chart 12-month best is left out).
 function scoreBarHTML(bar) {
-  const pct = v => `${Math.min(100, Math.max(0, v)).toFixed(1)}%`;
+  const clamp = v => Math.min(100, Math.max(0, v));
+  const pct = v => `${clamp(v).toFixed(1)}%`;
+  const [p3, p2, p1] = bar.layers.map(clamp);
+  const seg = (from, to, cls) => to > from
+    ? `<div class="${cls}" style="left:${from.toFixed(1)}%;width:${(to - from).toFixed(1)}%"></div>` : '';
   const ticks = bar.ticks.map(t => {
     const fresh = 1 - Math.min(1, t.ageDays / RECENT_DAYS);
-    return `<span class="sb-tick" style="left:${pct(t.pos)};opacity:${(0.25 + 0.75 * fresh).toFixed(2)};height:${(6 + 6 * fresh).toFixed(1)}px"></span>`;
+    const style = `left:${pct(t.pos)};opacity:${(0.2 + 0.8 * fresh ** 1.5).toFixed(2)};` +
+      `height:${(5 + 11 * fresh).toFixed(1)}px${fresh > 0.9 ? ';width:3px' : ''}`;
+    return `<span class="sb-tick" style="${style}"></span>`;
   }).join('');
   const year = bar.year.off ? '' : `<span class="sb-year" style="left:${pct(bar.year.pos)}"></span>`;
   const all = bar.all.off ? '<span class="sb-all-off"></span>' : `<span class="sb-all" style="left:${pct(bar.all.pos)}"></span>`;
-  const title = `Green: best of last 4 weeks · ticks: recent workouts (darker = newer)` +
+  const title = `Green: top 3 workouts of the last 4 weeks (lightest = best) · ticks: recent workouts (darker = newer)` +
     (bar.year.off ? '' : ` · ▼ 12-month best (${bar.year.date})`) +
     (bar.all.off ? ` · ▶ all-time best (${bar.all.date}) is off the chart` : ` · ▲ all-time best (${bar.all.date})`);
   return `
     <div class="score-bar" title="${esc(title)}">
-      <div class="sb-track"><div class="sb-fill" style="width:${pct(bar.fill.pos)}"></div></div>
+      <div class="sb-track">${seg(0, p3, 'sb-seg sb-seg-3')}${seg(p3, p2, 'sb-seg sb-seg-2')}${seg(p2, p1, 'sb-seg sb-seg-1')}</div>
       ${ticks}
       ${year}
       ${all}
