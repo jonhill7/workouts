@@ -156,18 +156,21 @@ export function setCountRecords(sortedSets, type) {
 
 // ---------------------------------------------------------------------------
 // Workout Score — one number per (exercise, workout day), higher is better,
-// so a day can be compared with any other day of the same exercise. It's the
-// day's best single set; the number of sets doesn't count.
+// so a day can be compared with any other day of the same exercise. Each set
+// gets a set score (below); the day's sets are ranked best first and summed
+// with geometrically decaying weights: 1 × best + ½ × 2nd + ¼ × 3rd + …
+// So 8 + 8 reps beats 8 + 7, an extra set never lowers the Score, each extra
+// set adds less than the last, and the total can't exceed 2 × the best set
+// (warm-ups rank last and barely count). Set scores:
 //
-//   weight × reps    best Epley estimated 1RM (kg). An exercise never logged
-//                    with weight (bodyweight) scores by most reps instead.
-//   distance / time  best 5 km-equivalent speed (m/s): each set's time is
+//   weight × reps    Epley estimated 1RM (kg). An exercise never logged
+//                    with weight (bodyweight) scores by reps instead.
+//   distance / time  5 km-equivalent speed (m/s): each set's time is
 //                    scaled to 5 km with Riegel's race formula, so a fast
 //                    short run and a slow long one compare fairly. Without
-//                    any distance+time set it scores by longest distance,
-//                    then longest time.
-//   set # × reps     most reps (or longest time) in one set
-//   resistance level best level × minutes (or level × reps) in one set, so
+//                    any distance+time set it scores by distance, then time.
+//   set # × reps     reps (or time) in one set
+//   resistance level level × minutes (or level × reps) in one set, so
 //                    harder levels count for more. Assumes a higher level is
 //                    harder, as on machines (elliptical, bike).
 //
@@ -209,27 +212,42 @@ export function scoreInfo(sets, type, levelKind) {
   return { mode: 'reps', scoreOf: s => s.reps };
 }
 
+export const SET_DECAY = 0.5;
+
+// One day's Score from its sets: set scores best first, weighted 1, ½, ¼, …
+export function dayScore(daySets, scoreOf) {
+  return daySets.map(s => scoreOf(s) || 0).filter(v => v > 0).sort((a, b) => b - a)
+    .reduce((sum, v, i) => sum + v * SET_DECAY ** i, 0);
+}
+
 export function workoutScores(sets, type, levelKind) {
   const { scoreOf } = scoreInfo(sets, type, levelKind);
   const byDate = new Map();
   for (const s of sets) {
-    const v = scoreOf(s) || 0;
-    if (v > (byDate.get(s.date) || 0)) byDate.set(s.date, v);
+    if (!byDate.has(s.date)) byDate.set(s.date, []);
+    byDate.get(s.date).push(s);
   }
-  return [...byDate.keys()].sort().map(date => ({ date, score: byDate.get(date) }));
+  return [...byDate.keys()].sort()
+    .map(date => ({ date, score: dayScore(byDate.get(date), scoreOf) }))
+    .filter(p => p.score > 0);
 }
 
 const dayDiff = (a, b) => Math.round((Date.parse(a + 'T00:00:00Z') - Date.parse(b + 'T00:00:00Z')) / 86_400_000);
 
 // Everything the exercise-list bar needs, positions as 0–100 (% of width).
-// The bar runs from BAR_FLOOR × the all-time best to the all-time best, so
-// every exercise's bar reads the same way ("I'm at 90% of my best") and the
-// scale doesn't shift as history changes. Scores below the floor sit at 0.
+// The bar always spans BAR_SPAN × the all-time best. Normally it runs from
+// 50% of the all-time best to the all-time best, so every exercise's bar
+// reads the same way ("I'm at 90% of my best"). When the best recent workout
+// falls too low for that, the window slides down until that workout sits
+// BAR_MIN_FILL of the way along, and the all-time best goes off the right
+// edge (all.off). Recent workouts below the window sit at 0.
 //   fill    best score among workouts in the last `recentDays`
 //   ticks   one per recent workout, oldest first, with ageDays
-//   year    best score of the last 365 days; all: all-time best
+//   year    best score of the last 365 days (off when past the right edge)
+//   all     all-time best
 // Returns null when there's no recent scored workout.
-export const BAR_FLOOR = 0.5;
+export const BAR_SPAN = 0.5;
+export const BAR_MIN_FILL = 0.25;
 
 export function scoreBar(scores, today, recentDays = 28) {
   const recent = scores.filter(p => dayDiff(today, p.date) <= recentDays);
@@ -237,13 +255,16 @@ export function scoreBar(scores, today, recentDays = 28) {
   const year = scores.filter(p => dayDiff(today, p.date) <= 365);
   const best = list => list.reduce((b, p) => (!b || p.score > b.score ? p : b), null);
   const all = best(scores), yearBest = best(year), recentBest = best(recent);
-  const lo = all.score * BAR_FLOOR;
-  const pos = v => Math.max(0, ((v - lo) / (all.score - lo)) * 100);
+  const span = all.score * BAR_SPAN;
+  const lo = Math.min(all.score - span, recentBest.score - BAR_MIN_FILL * span);
+  const hi = lo + span;
+  const pos = v => Math.max(0, ((v - lo) / span) * 100);
+  const yearPos = pos(yearBest.score);
   return {
-    lo, hi: all.score,
+    lo, hi,
     fill: { ...recentBest, pos: pos(recentBest.score) },
     ticks: recent.map(p => ({ ...p, pos: pos(p.score), ageDays: dayDiff(today, p.date) })),
-    year: { ...yearBest, pos: pos(yearBest.score) },
-    all: { ...all, pos: 100 },
+    year: { ...yearBest, pos: Math.min(100, yearPos), off: yearPos > 100 + 1e-9 },
+    all: { ...all, pos: 100, off: all.score > hi + 1e-9 },
   };
 }
