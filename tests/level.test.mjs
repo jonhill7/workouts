@@ -4,6 +4,7 @@ import { strict as assert } from 'node:assert';
 import {
   KG_PER_LB, parseFitNotesCSV, setKey,
   LEVEL_SOURCES, DEFAULT_LEVEL_SOURCE, levelFromSet, convertToLevel,
+  levelSourcesFor, isSwappedLevelTime, recoverSwappedLevelTime,
 } from '../app/js/importer.js';
 import { buildCSV } from '../app/js/exporter.js';
 
@@ -86,6 +87,55 @@ test('default level sources exist for every level type', () => {
   for (const t of ['level_reps', 'level_time']) {
     assert.ok(LEVEL_SOURCES[DEFAULT_LEVEL_SOURCE[t]], t);
   }
+});
+
+test('reps_time sources: reps become level, weight minutes become time', () => {
+  // stationary bike logged in FitNotes as 30 lbs × 6 reps = level 6 for 30 min
+  const row = { date: '2026-08-01', weightKg: 30 * KG_PER_LB, reps: 6, distanceM: 0, timeSec: 0, comment: '' };
+  const out = convertToLevel('reps_time_lbs', row);
+  assert.equal(out.level, 6);
+  assert.equal(out.reps, 0);
+  assert.equal(out.weightKg, 0);
+  assert.equal(out.timeSec, 1800);
+  // fractional minutes keep their seconds
+  const set = { id: 1, weight: 22.5, reps: 4, distance: 0, time: 0 };
+  const out2 = convertToLevel('reps_time_kg', set);
+  assert.deepEqual([out2.level, out2.time, out2.weight, out2.reps], [4, 1350, 0, 0]);
+  // a real logged time wins over the weight proxy
+  assert.equal(convertToLevel('reps_time_lbs', { ...row, timeSec: 1500 }).timeSec, 1500);
+});
+
+test('reps_time sources are offered only for Level/Time', () => {
+  const ids = t => levelSourcesFor(t).map(([id]) => id);
+  assert.ok(ids('level_time').includes('reps_time_lbs'));
+  assert.ok(!ids('level_reps').includes('reps_time_lbs'));
+  assert.ok(ids('level_reps').includes('weight_lbs'));
+});
+
+test('recoverSwappedLevelTime undoes the old weight→level bike conversion', () => {
+  // what the old converter produced from 30 lbs × level 6
+  const mangled = convertToLevel('weight_lbs',
+    { id: 9, date: '2026-08-01', weight: 30 * KG_PER_LB, reps: 6, distance: 0, time: 0, comment: '' });
+  assert.deepEqual([mangled.level, mangled.reps, mangled.time], [30, 6, 0]);
+  assert.ok(isSwappedLevelTime(mangled));
+  const fixed = recoverSwappedLevelTime(mangled);
+  assert.deepEqual([fixed.id, fixed.level, fixed.reps, fixed.time], [9, 6, 0, 1800]);
+  assert.equal(recoverSwappedLevelTime(mangled, 1).time, 30);
+  // healthy level/time sets are left alone
+  const ok = { level: 8, reps: 0, time: 1800, weight: 0, distance: 0 };
+  assert.ok(!isSwappedLevelTime(ok));
+  assert.equal(recoverSwappedLevelTime(ok), ok);
+});
+
+test('reps_time exercise exports level as reps and round-trips', () => {
+  const categories = [{ id: 1, name: 'Cardio' }];
+  const exercises = [{ id: 1, name: 'Stationary Bike', categoryId: 1, type: 'level_time', levelKind: 'resistance', levelFrom: 'reps_time_lbs' }];
+  const sets = [{ id: 1, exerciseId: 1, date: '2026-08-01', weight: 0, reps: 0, distance: 0, time: 1800, level: 6, comment: '', seq: 1 }];
+  const csv = buildCSV({ sets, exercises, categories, unit: 'lbs' });
+  assert.equal(csv.trim().split('\r\n')[1], '2026-08-01,Stationary Bike,Cardio,,,6,,,30:00,');
+  const { rows } = parseFitNotesCSV(csv);
+  const back = convertToLevel('reps_time_lbs', rows[0]);
+  assert.equal(setKey('stationary bike', back), setKey('stationary bike', sets[0]));
 });
 
 console.log(`${passed} tests passed`);
