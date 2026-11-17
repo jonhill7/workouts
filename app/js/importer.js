@@ -229,7 +229,29 @@ export const LEVEL_SOURCES = {
   weight_kg: { label: 'Weight (kg)', field: 'weight', unit: 'kg', perUnit: 1 },
   distance_m: { label: 'Distance (m)', field: 'distance', unit: 'm', perUnit: 1 },
   distance_km: { label: 'Distance (km)', field: 'distance', unit: 'km', perUnit: 1000 },
+  // Level/time machines logged as "reps = level, weight = minutes" (e.g. a
+  // stationary bike at level 6 for 30 min entered as 30 lbs × 6). The level
+  // comes out of reps and the weight becomes the time. Level/Time only.
+  reps_time_lbs: { label: 'Reps (time logged as Weight, lbs = minutes)', field: 'reps', unit: '', perUnit: 1,
+    timeFrom: { field: 'weight', perUnit: KG_PER_LB }, types: ['level_time'] },
+  reps_time_kg: { label: 'Reps (time logged as Weight, kg = minutes)', field: 'reps', unit: '', perUnit: 1,
+    timeFrom: { field: 'weight', perUnit: 1 }, types: ['level_time'] },
 };
+
+// Sources that make sense for an exercise type.
+export const levelSourcesFor = type =>
+  Object.entries(LEVEL_SOURCES).filter(([, src]) => !src.types || src.types.includes(type));
+
+// Raw proxy value of a set/row, in the source's logged unit (before rounding).
+export function rawProxyValue(source, s) {
+  const src = LEVEL_SOURCES[source];
+  if (!src) return 0;
+  if (src.field === 'reps') return s.reps ?? 0;
+  const raw = src.field === 'weight'
+    ? (s.weightKg ?? s.weight ?? 0)
+    : (s.distanceM ?? s.distance ?? 0);
+  return raw / src.perUnit;
+}
 
 export const DEFAULT_LEVEL_SOURCE = {
   level_reps: 'weight_lbs',
@@ -239,23 +261,43 @@ export const DEFAULT_LEVEL_SOURCE = {
 // Read the level a proxy field encodes. Accepts both stored-set field names
 // (weight/distance) and import-row names (weightKg/distanceM).
 export function levelFromSet(source, s) {
-  const src = LEVEL_SOURCES[source];
-  if (!src) return 0;
-  const raw = src.field === 'weight'
-    ? (s.weightKg ?? s.weight ?? 0)
-    : (s.distanceM ?? s.distance ?? 0);
-  return Math.max(0, Math.round(raw / src.perUnit));
+  return Math.max(0, Math.round(rawProxyValue(source, s)));
 }
 
 // Copy of a set/row with the proxy value moved into `level` and the proxy
 // field zeroed. Sets that already carry a level pass through untouched.
 export function convertToLevel(source, s) {
   if (s.level > 0 || !LEVEL_SOURCES[source]) return s;
+  const src = LEVEL_SOURCES[source];
   const out = { ...s, level: levelFromSet(source, s) };
-  const zero = LEVEL_SOURCES[source].field === 'weight'
-    ? ['weight', 'weightKg'] : ['distance', 'distanceM'];
+  const zero = src.field === 'weight' ? ['weight', 'weightKg']
+    : src.field === 'distance' ? ['distance', 'distanceM'] : ['reps'];
+  if (src.timeFrom) {
+    // Keep a real logged time if there is one; otherwise the proxy weight
+    // (minutes) becomes the time. The weight is zeroed either way.
+    const tf = src.timeFrom.field === 'weight' ? ['weight', 'weightKg'] : ['distance', 'distanceM'];
+    const proxy = (s[tf[1]] ?? s[tf[0]] ?? 0) / src.timeFrom.perUnit;
+    const timeField = 'timeSec' in s ? 'timeSec' : 'time';
+    if (!(s[timeField] > 0) && proxy > 0) out[timeField] = Math.round(proxy * 60);
+    zero.push(...tf);
+  }
   for (const f of zero) if (f in out) out[f] = 0;
   return out;
+}
+
+// Repair for bike-style sets that an earlier conversion mangled: the user
+// logged reps = level and weight = minutes, the converter (which had no such
+// option) moved the weight into level and zeroed it, leaving the real level
+// in reps and no time. Such a set has level > 0, reps > 0, and no time,
+// weight or distance. Its level is the old minutes (rounded to a whole
+// number by that conversion) and its reps are the real level.
+export const isSwappedLevelTime = s =>
+  s.level > 0 && s.reps > 0 && !(s.time > 0) && !(s.weight > 0) && !(s.distance > 0);
+
+// `secondsPerUnit` is 60 when the old number was minutes, 1 for seconds.
+export function recoverSwappedLevelTime(s, secondsPerUnit = 60) {
+  if (!isSwappedLevelTime(s)) return s;
+  return { ...s, level: s.reps, reps: 0, time: Math.round(s.level * secondsPerUnit) };
 }
 
 // Identity key for duplicate detection. Weight compares at 0.01 kg and
