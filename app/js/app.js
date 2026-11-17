@@ -2,7 +2,7 @@ import * as db from './db.js';
 import {
   KG_PER_LB, parseFitNotesCSV, setKey, inferType, timeToString,
   LEVEL_TYPES, LEVEL_SOURCES, DEFAULT_LEVEL_SOURCE, levelFromSet, convertToLevel,
-  levelSourcesFor, rawProxyValue, isSwappedLevelTime, recoverSwappedLevelTime,
+  levelSourcesFor, rawProxyValue, hasStrandedRepsTime, recoverRepsTime,
 } from './importer.js';
 import { loadSqlJs, looksLikeSQLite, parseFitNotesDB } from './fitnotes-db.js';
 import {
@@ -19,7 +19,7 @@ import {
   dayLabel, daySetCount, blockTarget, nextDayIndex, courseStreak, weekCount,
 } from './courses.js';
 
-export const APP_VERSION = '1.15.1';
+export const APP_VERSION = '1.15.2';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
@@ -920,11 +920,11 @@ async function offerLevelConversion(ex) {
   if (!candidates.length) return;
 
   const hasWeight = candidates.some(s => s.weight > 0);
-  // Level/time sets with reps and a weight but no time were logged as
-  // "reps = level, weight = minutes" (stationary bike style).
+  // Level/time sets with a weight and reps but no time were logged as
+  // "weight = level, reps = minutes" (stationary bike style).
   const bikeStyle = ex.type === 'level_time'
     && candidates.every(s => s.weight > 0 && s.reps > 0 && !(s.time > 0));
-  const defaultSource = bikeStyle ? (isMetric() ? 'reps_time_kg' : 'reps_time_lbs')
+  const defaultSource = bikeStyle ? (isMetric() ? 'weight_kg_time_reps' : 'weight_lbs_time_reps')
     : hasWeight ? 'weight_lbs' : 'distance_m';
 
   const preview = source => {
@@ -973,29 +973,27 @@ async function offerLevelConversion(ex) {
   });
 }
 
-// Repair for Level/Time sets that the conversion above mangled before it had
-// a "reps = level, weight = minutes" option: the minutes landed in level,
-// the real level stayed in reps, and the time was empty. Swap them back.
+// Repair for Level/Time sets converted before the "time logged as Reps"
+// option existed: the level came across from Weight correctly, but the
+// minutes were left in Reps, which Level/Time doesn't show. Move them to Time.
 async function offerTimeRecovery(ex) {
-  const sets = (await setsForExercise(ex.id)).filter(isSwappedLevelTime);
+  const sets = (await setsForExercise(ex.id)).filter(hasStrandedRepsTime);
   if (!sets.length) return;
   const preview = per => {
-    const fixed = sets.map(s => recoverSwappedLevelTime(s, per));
-    const lv = [...new Set(fixed.map(s => s.level))].sort((a, b) => a - b);
+    const fixed = sets.map(s => recoverRepsTime(s, per));
     const t = fixed.map(s => s.time).sort((a, b) => a - b);
     const ex1 = sets[0], f1 = fixed[0];
-    return `${sets.length} set${sets.length === 1 ? '' : 's'} → level ${lv[0]}${lv.length > 1 ? `–${lv[lv.length - 1]}` : ''}, `
-      + `time ${timeToString(t[0])}${t[t.length - 1] !== t[0] ? `–${timeToString(t[t.length - 1])}` : ''}. `
-      + `e.g. ${ex1.date}: level ${ex1.level} → level ${f1.level}, ${timeToString(f1.time)}`;
+    return `${sets.length} set${sets.length === 1 ? '' : 's'} → time `
+      + `${timeToString(t[0])}${t[t.length - 1] !== t[0] ? `–${timeToString(t[t.length - 1])}` : ''}. `
+      + `e.g. ${ex1.date}: level ${ex1.level}, ${ex1.reps} reps → level ${f1.level}, ${timeToString(f1.time)}`;
   };
   await new Promise(resolve => {
     const { el, close } = openModal(`
       <h3>Recover missing times?</h3>
       <p class="modal-body">${sets.length} set${sets.length === 1 ? '' : 's'} of <strong>${esc(ex.name)}</strong>
-        have no time and a number still in Reps. They look like they were logged as reps = level and
-        weight = time, and an earlier conversion moved the time into Level. This puts the level back
-        and turns the old number into the time.</p>
-      <label class="field-label">The old weight number was
+        have no time but still have a number in Reps. They look like they were logged as
+        weight = level and reps = time. The level converted fine; this moves the Reps number into Time.</p>
+      <label class="field-label">The Reps number was
         <select id="rec-unit" class="text-input">
           <option value="60" selected>Minutes</option>
           <option value="1">Seconds</option>
@@ -1011,9 +1009,12 @@ async function offerTimeRecovery(ex) {
     el.querySelector('[data-act=skip]').onclick = () => { close(); resolve(); };
     el.querySelector('[data-act=fix]').onclick = async () => {
       const per = Number(sel.value);
-      await db.bulkPut('sets', sets.map(s => recoverSwappedLevelTime(s, per)));
+      await db.bulkPut('sets', sets.map(s => recoverRepsTime(s, per)));
       // Future FitNotes imports of this exercise use the matching rule.
-      if (per === 60) await db.put('exercises', { ...ex, levelFrom: isMetric() ? 'reps_time_kg' : 'reps_time_lbs' });
+      if (per === 60) {
+        const levelFrom = ex.levelFrom === 'weight_kg' ? 'weight_kg_time_reps' : 'weight_lbs_time_reps';
+        await db.put('exercises', { ...ex, levelFrom });
+      }
       close();
       toast(`Recovered times on ${sets.length} sets`);
       resolve();
