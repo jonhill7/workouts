@@ -22,7 +22,7 @@ export function buildCSV({ sets, exercises, categories, unit }) {
   const lines = ['Date,Exercise,Category,Weight,Weight Unit,Reps,Distance,Distance Unit,Time,Comment'];
   const sorted = [...sets].sort((a, b) =>
     a.date < b.date ? -1 : a.date > b.date ? 1 : (a.seq ?? 0) - (b.seq ?? 0));
-  for (let s of sorted) {
+  for (const s of sorted) {
     const ex = exById.get(s.exerciseId);
     if (!ex) continue;
     const cat = catById.get(ex.categoryId);
@@ -37,11 +37,7 @@ export function buildCSV({ sets, exercises, categories, unit }) {
     if (LEVEL_TYPES.has(ex.type)) {
       const src = LEVEL_SOURCES[ex.levelFrom] || LEVEL_SOURCES[DEFAULT_LEVEL_SOURCE[ex.type]];
       const lvl = s.level > 0 ? s.level : '';
-      if (src.field === 'reps') {
-        // Level goes out as reps; the time stays in the Time column, which
-        // the reps_time sources keep on re-import.
-        s = { ...s, reps: lvl === '' ? 0 : lvl };
-      } else if (src.field === 'weight') {
+      if (src.field === 'weight') {
         weight = lvl;
         weightUnit = lvl === '' ? '' : src.unit;
       } else {
