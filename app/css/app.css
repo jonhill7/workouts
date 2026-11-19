@@ -129,6 +129,9 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
   border-bottom: 8px solid var(--bg);
 }
 .exercise-group:active .wgroup-name { text-decoration: underline; }
+/* Score bar under the exercise name on the day's log, same bar as the picker */
+.wgroup-bar { padding: 0 16px 6px; }
+.wgroup-bar .score-bar { margin: 0 10px 0 0; }
 .wgroup-name {
   color: var(--accent);
   font-size: 16px; font-weight: 500;
