@@ -428,11 +428,20 @@ async function renderHome() {
     byEx.get(s.exerciseId).sets.push(s);
   }
 
-  // PR trophies need each exercise's full history
+  // PR trophies and Score bars need each exercise's full history. The bar is
+  // drawn as of the day on screen: only workouts up to that day count, so the
+  // day's own workout is the newest (boldest) tick, compared with the four
+  // weeks before it and the bests set by then.
   const prByEx = new Map();
+  const barByEx = new Map();
   await Promise.all(groups.map(async g => {
     if (!g.exercise) return;
-    prByEx.set(g.exercise.id, computePRIds(await setsForExercise(g.exercise.id), g.exercise.type, g.exercise.levelKind));
+    const { type, levelKind } = g.exercise;
+    const hist = await setsForExercise(g.exercise.id);
+    prByEx.set(g.exercise.id, computePRIds(hist, type, levelKind));
+    const scores = workoutScores(hist, type, levelKind).filter(p => p.date <= state.date);
+    const bar = scoreBar(scores, state.date, RECENT_DAYS);
+    if (bar) barByEx.set(g.exercise.id, bar);
   }));
 
   const groupsHtml = groups.map(g => {
@@ -442,6 +451,7 @@ async function renderHome() {
     return `
       <div class="exercise-group" data-ex="${g.exercise.id}">
         <div class="wgroup-name">${esc(g.exercise.name)}</div>
+        ${barByEx.has(g.exercise.id) ? `<div class="wgroup-bar">${scoreBarHTML(barByEx.get(g.exercise.id))}</div>` : ''}
         ${rows}
       </div>`;
   }).join('');
