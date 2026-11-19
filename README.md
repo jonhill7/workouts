@@ -88,7 +88,9 @@ any prior CSV import), per-exercise notes, and routines.
   added best first with halving weights (1 × best + ½ × 2nd + ¼ × 3rd …), so
   8 + 8 reps beats 8 + 7, an extra set never lowers the Score, and the total
   can't pass twice the best set. Set scores: estimated 1RM for weight × reps
-  (reps if never weighted), a 5K-equivalent speed for distance/time (Riegel's
+  (Epley: weight × (1 + reps / 30)); the weight counts once, so later sets
+  add only their rep part, weight × reps / 30, and 70 × 3 + 70 × 2 doesn't
+  beat 70 × 5 (reps if never weighted), a 5K-equivalent speed for distance/time (Riegel's
   formula; distance or time when no set has both), reps / time for
   set-numbered exercises, and level × minutes (or level × reps) for resistance
   levels, assuming a higher level is harder. Scores are shown as points.
