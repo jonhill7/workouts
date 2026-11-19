@@ -5,6 +5,7 @@ import {
   KG_PER_LB, parseFitNotesCSV, setKey,
   LEVEL_SOURCES, DEFAULT_LEVEL_SOURCE, levelFromSet, convertToLevel,
   levelSourcesFor, hasStrandedRepsTime, recoverRepsTime,
+  needsDistance, biggestGapCutoff, fitMetersPerMin, planDistanceConversion, METERS_PER_TENTH_MILE,
 } from '../app/js/importer.js';
 import { buildCSV } from '../app/js/exporter.js';
 
@@ -131,6 +132,44 @@ test('time-in-reps exercise exports level as weight and round-trips', () => {
   const { rows } = parseFitNotesCSV(csv);
   const back = convertToLevel('weight_lbs_time_reps', rows[0]);
   assert.equal(setKey('stationary bike', back), setKey('stationary bike', sets[0]));
+});
+
+// Jonathan's stationary bike: weight = level, reps = tenths of a mile until
+// a gap in 2020–2023, reps = minutes after it.
+const bike = [
+  { id: 1, date: '2019-03-01', level: 5, reps: 26, time: 600, weight: 0, distance: 0 },   // 2.6 mi, 10 min
+  { id: 2, date: '2019-06-01', level: 6, reps: 90, time: 2160, weight: 0, distance: 0 },  // 9 mi, 36 min
+  { id: 3, date: '2020-02-01', level: 6, reps: 131, time: 0, weight: 0, distance: 0 },   // 13.1 mi
+  { id: 4, date: '2023-05-01', level: 7, reps: 30, time: 0, weight: 0, distance: 0 },    // 30 min
+  { id: 5, date: '2024-01-01', level: 7, reps: 0, time: 1500, weight: 0, distance: 0 },  // already a time
+  { id: 6, date: '2024-02-01', level: 8, reps: 0, time: 1200, weight: 0, distance: 4000 }, // already fine
+];
+
+test('biggestGapCutoff finds the start of the post-gap stretch', () => {
+  assert.equal(biggestGapCutoff(bike), '2023-05-01');
+  assert.equal(biggestGapCutoff([bike[0]]), null);
+});
+
+test('fitMetersPerMin fits speed from pre-cutoff sets with distance-in-reps and time', () => {
+  const mpm = fitMetersPerMin(bike, '2023-05-01');
+  // (2.6·10 + 9·36) / (10² + 36²) mi/min
+  const expect = ((2.6 * 10 + 9 * 36) / (100 + 1296)) * 1609.344;
+  assert.ok(Math.abs(mpm - expect) < 1e-6);
+  assert.equal(fitMetersPerMin(bike, '2000-01-01'), null);
+});
+
+test('planDistanceConversion reads reps as distance before the cutoff, minutes after', () => {
+  assert.ok(!needsDistance(bike[5]));
+  const mpm = 0.26 * 1609.344;
+  const plan = planDistanceConversion(bike, { cutoff: '2023-05-01', metersPerMin: mpm });
+  const by = Object.fromEntries(plan.map(p => [p.from.id, p]));
+  assert.equal(plan.length, 5);
+  assert.deepEqual([by[1].mode, by[1].set.distance, by[1].set.time, by[1].set.reps, by[1].set.level],
+    ['distance', Math.round(26 * METERS_PER_TENTH_MILE), 600, 0, 5]);
+  assert.equal(by[3].set.distance, Math.round(131 * METERS_PER_TENTH_MILE));
+  assert.deepEqual([by[4].mode, by[4].set.time, by[4].set.distance, by[4].set.reps, by[4].set.distanceEstimated],
+    ['time', 1800, Math.round(30 * mpm), 0, true]);
+  assert.deepEqual([by[5].set.time, by[5].set.distance], [1500, Math.round(25 * mpm)]);
 });
 
 console.log(`${passed} tests passed`);
