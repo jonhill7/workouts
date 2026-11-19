@@ -224,17 +224,22 @@ test('cardio PRs: longest distance ever; duration-only sets track time', () => {
   assert.deepEqual([...prs].sort(), [sets[1].id, sets[4].id].sort());
 });
 
-test('workoutScores weight_reps: Epley 1RMs best first, weighted 1, ½, ¼ …', () => {
+test('workoutScores weight_reps: best Epley 1RM + later sets\' rep parts × ½, ¼ …', () => {
   const sets = [
-    set('2024-01-01', 100, 1), set('2024-01-01', 90, 5), // 100, 105 → 105 + 50
+    set('2024-01-01', 100, 1), set('2024-01-01', 90, 5), // 105 + ½ × 100 × 1 / 30
     set('2024-01-08', 75, 12),                          // 105
-    set('2024-01-15', 60, 5), set('2024-01-15', 60, 5), set('2024-01-15', 60, 5), // 70 × 1.75
+    set('2024-01-15', 60, 5), set('2024-01-15', 60, 5), set('2024-01-15', 60, 5), // 70 + 10 × (½ + ¼)
   ];
   const sc = workoutScores(sets, 'weight_reps');
   assert.deepEqual(sc.map(p => p.date), ['2024-01-01', '2024-01-08', '2024-01-15']);
-  assert.ok(Math.abs(sc[0].score - 155) < 1e-9);
+  assert.ok(Math.abs(sc[0].score - (105 + 50 / 30)) < 1e-9);
   assert.ok(Math.abs(sc[1].score - 105) < 1e-9);
-  assert.ok(Math.abs(sc[2].score - 122.5) < 1e-9);
+  assert.ok(Math.abs(sc[2].score - 77.5) < 1e-9);
+  // the weight counts once: 70 × 3 + 70 × 2 (77 + ½ × 4⅔) loses to 70 × 5 (81⅔)
+  const [split, single] = workoutScores([set('2024-03-01', 70, 3), set('2024-03-01', 70, 2),
+    set('2024-03-02', 70, 5)], 'weight_reps').map(p => p.score);
+  assert.ok(Math.abs(split - (77 + 70 / 30)) < 1e-9);
+  assert.ok(single > split);
   // 8 + 8 beats 8 + 7; an extra (warm-up) set never lowers the score
   const day = (date, ...reps) => reps.map(r => set(date, 100, r));
   const [a, b, c] = workoutScores([...day('2024-02-01', 8, 7), ...day('2024-02-02', 8, 8),

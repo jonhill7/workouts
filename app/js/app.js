@@ -1580,7 +1580,7 @@ async function renderGraphTab(body, ex) {
   const agg = (daySets, metric) => {
     switch (metric) {
       case 'score': {
-        const score = dayScore(daySets, info.scoreOf);
+        const score = dayScore(daySets, info.scoreOf, info.extraOf);
         return score > 0 ? scoreDisplay(info, score).value : 0;
       }
       case 'maxWeight': return kgToDisplay(Math.max(...daySets.map(s => s.weight)));

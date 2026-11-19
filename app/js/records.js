@@ -165,8 +165,11 @@ export function setCountRecords(sortedSets, type) {
 // set adds less than the last, and the total can't exceed 2 × the best set
 // (warm-ups rank last and barely count). Set scores:
 //
-//   weight × reps    Epley estimated 1RM (kg). An exercise never logged
-//                    with weight (bodyweight) scores by reps instead.
+//   weight × reps    Epley estimated 1RM (kg), weight × (1 + reps / 30). The
+//                    weight counts once: the best set scores its full 1RM,
+//                    later sets only their rep part, weight × reps / 30, so
+//                    70 × 3 + 70 × 2 doesn't outscore 70 × 5. An exercise
+//                    never logged with weight (bodyweight) scores by reps.
 //   distance / time  5 km-equivalent speed (m/s): each set's time is
 //                    scaled to 5 km with Riegel's race formula, so a fast
 //                    short run and a slow long one compare fairly. Without
@@ -186,12 +189,20 @@ export function epley1RM(weightKg, reps) {
   return reps === 1 ? weightKg : weightKg * (1 + reps / 30); // Epley
 }
 
+// The reps' share of an Epley 1RM: weight × reps / 30.
+export function epleyRepPart(weightKg, reps) {
+  if (!(reps > 0) || !(weightKg > 0)) return 0;
+  return (weightKg * reps) / 30;
+}
+
 export function riegelTime(timeSec, distM, targetM = EQUIV_DIST_M) {
   if (!(timeSec > 0) || !(distM > 0)) return 0;
   return timeSec * (targetM / distM) ** RIEGEL_EXP;
 }
 
-// How this exercise's history is scored: { mode, scoreOf }.
+// How this exercise's history is scored: { mode, scoreOf, extraOf? }.
+// extraOf, when present, is what a set adds when it isn't the day's best
+// (see dayScore); otherwise later sets add their full scoreOf.
 // mode is the Score's unit: 'e1rm' (kg), 'speed' (5K-equivalent m/s),
 // 'distance' (m), 'time' (sec), 'reps', or for resistance levels
 // 'levelTime' (level × minutes) / 'levelReps' (level × reps).
@@ -211,27 +222,30 @@ export function scoreInfo(sets, type, levelKind) {
     if (type === 'level_distance') return { mode: 'levelDistance', scoreOf: s => (s.level || 0) * (s.distance || 0) };
     return { mode: 'levelReps', scoreOf: s => (s.level || 0) * s.reps };
   }
-  if (sets.some(s => s.weight > 0 && s.reps > 0)) return { mode: 'e1rm', scoreOf: s => epley1RM(s.weight, s.reps) };
+  if (sets.some(s => s.weight > 0 && s.reps > 0)) {
+    return { mode: 'e1rm', scoreOf: s => epley1RM(s.weight, s.reps), extraOf: s => epleyRepPart(s.weight, s.reps) };
+  }
   return { mode: 'reps', scoreOf: s => s.reps };
 }
 
 export const SET_DECAY = 0.5;
 
-// One day's Score from its sets: set scores best first, weighted 1, ½, ¼, …
-export function dayScore(daySets, scoreOf) {
-  return daySets.map(s => scoreOf(s) || 0).filter(v => v > 0).sort((a, b) => b - a)
-    .reduce((sum, v, i) => sum + v * SET_DECAY ** i, 0);
+// One day's Score from its sets, ranked by set score: the best set's full
+// score, then each later set's extraOf (default: its full score) × ½, ¼, …
+export function dayScore(daySets, scoreOf, extraOf = scoreOf) {
+  return daySets.map(s => ({ s, v: scoreOf(s) || 0 })).filter(x => x.v > 0).sort((a, b) => b.v - a.v)
+    .reduce((sum, x, i) => sum + (i === 0 ? x.v : (extraOf(x.s) || 0) * SET_DECAY ** i), 0);
 }
 
 export function workoutScores(sets, type, levelKind) {
-  const { scoreOf } = scoreInfo(sets, type, levelKind);
+  const { scoreOf, extraOf } = scoreInfo(sets, type, levelKind);
   const byDate = new Map();
   for (const s of sets) {
     if (!byDate.has(s.date)) byDate.set(s.date, []);
     byDate.get(s.date).push(s);
   }
   return [...byDate.keys()].sort()
-    .map(date => ({ date, score: dayScore(byDate.get(date), scoreOf) }))
+    .map(date => ({ date, score: dayScore(byDate.get(date), scoreOf, extraOf) }))
     .filter(p => p.score > 0);
 }
 
