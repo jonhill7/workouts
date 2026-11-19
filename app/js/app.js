@@ -19,7 +19,7 @@ import {
   dayLabel, daySetCount, blockTarget, nextDayIndex, courseStreak, weekCount,
 } from './courses.js';
 
-export const APP_VERSION = '1.15.2';
+export const APP_VERSION = '1.15.3';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
@@ -977,46 +977,72 @@ async function offerLevelConversion(ex) {
 // option existed: the level came across from Weight correctly, but the
 // minutes were left in Reps, which Level/Time doesn't show. Move them to Time.
 async function offerTimeRecovery(ex) {
-  const sets = (await setsForExercise(ex.id)).filter(hasStrandedRepsTime);
+  const sets = (await setsForExercise(ex.id)).filter(hasStrandedRepsTime)
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : (b.seq ?? 0) - (a.seq ?? 0)));
   if (!sets.length) return;
-  const preview = per => {
-    const fixed = sets.map(s => recoverRepsTime(s, per));
-    const t = fixed.map(s => s.time).sort((a, b) => a - b);
-    const ex1 = sets[0], f1 = fixed[0];
-    return `${sets.length} set${sets.length === 1 ? '' : 's'} → time `
-      + `${timeToString(t[0])}${t[t.length - 1] !== t[0] ? `–${timeToString(t[t.length - 1])}` : ''}. `
-      + `e.g. ${ex1.date}: level ${ex1.level}, ${ex1.reps} reps → level ${f1.level}, ${timeToString(f1.time)}`;
-  };
+  // Reps numbers that would make an implausibly long session are probably
+  // not minutes (a real rep count, a typo, a set from another exercise), so
+  // they start unticked and flagged for the user to look at.
+  const LONG_SEC = 90 * 60;
+  const picked = new Set(sets.filter(s => recoverRepsTime(s, 60).time <= LONG_SEC).map(s => s.id));
   await new Promise(resolve => {
     const { el, close } = openModal(`
       <h3>Recover missing times?</h3>
-      <p class="modal-body">${sets.length} set${sets.length === 1 ? '' : 's'} of <strong>${esc(ex.name)}</strong>
-        have no time but still have a number in Reps. They look like they were logged as
-        weight = level and reps = time. The level converted fine; this moves the Reps number into Time.</p>
+      <p class="modal-body">${sets.length} set${sets.length === 1 ? '' : 's'} of <strong>${esc(ex.name)}</strong> have no time but still have a number in Reps, as if logged as weight = level and reps = time. This moves the Reps number into Time; the level is already right.
+Untick any set that wasn't logged that way. Unticked sets are left as they are.</p>
       <label class="field-label">The Reps number was
         <select id="rec-unit" class="text-input">
           <option value="60" selected>Minutes</option>
           <option value="1">Seconds</option>
         </select>
       </label>
-      <p class="modal-body" id="rec-preview">${esc(preview(60))}</p>
+      <div class="rec-list" id="rec-list"></div>
+      <p class="modal-body" id="rec-summary"></p>
       <div class="modal-actions">
         <button class="btn btn-ghost" data-act="skip">Not now</button>
         <button class="btn btn-primary" data-act="fix">Recover</button>
       </div>`);
     const sel = el.querySelector('#rec-unit');
-    sel.onchange = () => { el.querySelector('#rec-preview').textContent = preview(Number(sel.value)); };
+    const list = el.querySelector('#rec-list');
+    const fixBtn = el.querySelector('[data-act=fix]');
+    const per = () => Number(sel.value);
+    const draw = () => {
+      list.innerHTML = sets.map(s => {
+        const t = recoverRepsTime(s, per()).time;
+        const long = t > LONG_SEC;
+        return `<label class="rec-row${long ? ' rec-long' : ''}">
+          <input type="checkbox" data-id="${s.id}" ${picked.has(s.id) ? 'checked' : ''}>
+          <span class="rec-date">${esc(s.date)}</span>
+          <span>Level ${s.level} · ${s.reps} reps → ${timeToString(t)}${long ? ' ⚠' : ''}</span>
+        </label>`;
+      }).join('');
+      list.querySelectorAll('input').forEach(cb => cb.onchange = () => {
+        const id = Number(cb.dataset.id);
+        if (cb.checked) picked.add(id); else picked.delete(id);
+        summarize();
+      });
+      summarize();
+    };
+    const summarize = () => {
+      const flagged = sets.filter(s => recoverRepsTime(s, per()).time > LONG_SEC).length;
+      el.querySelector('#rec-summary').textContent = `${picked.size} of ${sets.length} selected`
+        + (flagged ? ` · ⚠ ${flagged} would be over 90 min and ${flagged === 1 ? 'starts' : 'start'} unticked` : '');
+      fixBtn.disabled = !picked.size;
+    };
+    sel.onchange = draw;
+    draw();
     el.querySelector('[data-act=skip]').onclick = () => { close(); resolve(); };
-    el.querySelector('[data-act=fix]').onclick = async () => {
-      const per = Number(sel.value);
-      await db.bulkPut('sets', sets.map(s => recoverRepsTime(s, per)));
+    fixBtn.onclick = async () => {
+      const chosen = sets.filter(s => picked.has(s.id));
+      if (!chosen.length) return;
+      await db.bulkPut('sets', chosen.map(s => recoverRepsTime(s, per())));
       // Future FitNotes imports of this exercise use the matching rule.
-      if (per === 60) {
+      if (per() === 60) {
         const levelFrom = ex.levelFrom === 'weight_kg' ? 'weight_kg_time_reps' : 'weight_lbs_time_reps';
         await db.put('exercises', { ...ex, levelFrom });
       }
       close();
-      toast(`Recovered times on ${sets.length} sets`);
+      toast(`Recovered times on ${chosen.length} set${chosen.length === 1 ? '' : 's'}`);
       resolve();
     };
   });

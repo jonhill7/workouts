@@ -404,6 +404,11 @@ button { font: inherit; color: inherit; background: none; border: none; cursor: 
 .modal-actions .btn { box-shadow: none; }
 .modal-actions .btn-ghost, .modal-actions .btn-primary { background: none; color: var(--accent); text-transform: uppercase; }
 .modal-actions .btn-danger { background: none; color: var(--danger); }
+.rec-list { max-height: 40vh; overflow-y: auto; margin-bottom: 10px; border-top: 1px solid var(--hairline); }
+.rec-row { display: flex; align-items: center; gap: 8px; padding: 6px 2px; font-size: 13px; color: var(--ink-2); border-bottom: 1px solid var(--hairline); }
+.rec-row input { flex: none; }
+.rec-date { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rec-long { color: var(--danger); }
 .flex-spacer { flex: 1; }
 .field-label { display: block; font-size: 13px; font-weight: 500; color: var(--ink-2); margin-bottom: 12px; }
 .field-label .text-input { margin-top: 4px; margin-bottom: 0; }
