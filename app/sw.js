@@ -4,7 +4,7 @@
 // (an "Update ready" toast offers an immediate reload). Bump the number here
 // alongside APP_VERSION in js/app.js when you want a new visible version.
 
-const VERSION = 'v1.15.2';
+const VERSION = 'v1.16.0';
 const CACHE = `workout-log-${VERSION}`;
 
 const ASSETS = [

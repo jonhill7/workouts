@@ -3,6 +3,7 @@ import {
   KG_PER_LB, parseFitNotesCSV, setKey, inferType, timeToString,
   LEVEL_TYPES, LEVEL_SOURCES, DEFAULT_LEVEL_SOURCE, levelFromSet, convertToLevel,
   levelSourcesFor, rawProxyValue, hasStrandedRepsTime, recoverRepsTime,
+  needsDistance, biggestGapCutoff, fitMetersPerMin, planDistanceConversion,
 } from './importer.js';
 import { loadSqlJs, looksLikeSQLite, parseFitNotesDB } from './fitnotes-db.js';
 import {
@@ -19,7 +20,7 @@ import {
   dayLabel, daySetCount, blockTarget, nextDayIndex, courseStreak, weekCount,
 } from './courses.js';
 
-export const APP_VERSION = '1.15.2';
+export const APP_VERSION = '1.16.0';
 
 // ---------------------------------------------------------------------------
 // Small DOM + formatting helpers
@@ -158,7 +159,8 @@ function displayDistToM(v) { return isMetric() ? v * 1000 : v * 1609.344; }
 // changes labels, prefill behavior and record wording.
 const typeUsesLevel = t => LEVEL_TYPES.has(t);
 const typeUsesReps = t => t === 'weight_reps' || t === 'level_reps';
-const typeUsesTime = t => t === 'distance_time' || t === 'level_time';
+const typeUsesTime = t => t === 'distance_time' || t === 'level_time' || t === 'level_distance';
+const typeUsesDist = t => t === 'distance_time' || t === 'level_distance';
 const levelNoun = ex => ex.levelKind === 'resistance' ? 'Level' : 'Set';
 const levelFieldTitle = ex => ex.levelKind === 'resistance' ? 'RESISTANCE LEVEL' : 'SET #';
 
@@ -185,6 +187,10 @@ function describeCols(s, ex) {
   if (ex.type === 'level_reps') return [`${levelNoun(ex)} ${s.level || 0}`, `${s.reps} reps`];
   if (ex.type === 'level_time') {
     return [`${levelNoun(ex)} ${s.level || 0}`, s.time > 0 ? timeToString(s.time) : '—'];
+  }
+  if (ex.type === 'level_distance') {
+    const dist = s.distance > 0 ? `${fmtNum(mToDisplayDist(s.distance))} ${distUnitLabel()}` : '—';
+    return [`${levelNoun(ex)} ${s.level || 0}`, s.time > 0 ? `${dist} · ${timeToString(s.time)}` : dist];
   }
   return [`${fmtWeight(s.weight)} ${getUnit()}`, `${s.reps} reps`];
 }
@@ -213,6 +219,7 @@ function scoreDisplay(info, score) {
     case 'e1rm': v = kgToDisplay(score); break;
     case 'speed': v = mToDisplayDist(score * 3600); break;
     case 'distance': v = mToDisplayDist(score); break;
+    case 'levelDistance': v = mToDisplayDist(score); break;
     case 'time': v = score / 60; break;
     default: v = score;
   }
@@ -841,6 +848,7 @@ async function exerciseEditor(existing, defaultCategoryId) {
         <option value="distance_time" ${existing?.type === 'distance_time' ? 'selected' : ''}>Distance / Time</option>
         <option value="level_reps" ${existing?.type === 'level_reps' ? 'selected' : ''}>Set/Level × Reps (bodyweight, bands)</option>
         <option value="level_time" ${existing?.type === 'level_time' ? 'selected' : ''}>Level / Time (machine resistance)</option>
+        <option value="level_distance" ${existing?.type === 'level_distance' ? 'selected' : ''}>Level / Distance (machine resistance)</option>
       </select>
     </label>
     <label class="field-label" id="exe-lvlkind-wrap" ${typeUsesLevel(existing?.type) ? '' : 'hidden'}>Level means
@@ -885,7 +893,9 @@ async function exerciseEditor(existing, defaultCategoryId) {
       return;
     }
     close();
-    if (typeUsesLevel(type) && existing && !typeUsesLevel(existing.type)) {
+    if (type === 'level_distance' && existing && existing.type !== 'level_distance' && typeUsesLevel(existing.type)) {
+      await offerDistanceConversion(rec);
+    } else if (typeUsesLevel(type) && existing && !typeUsesLevel(existing.type)) {
       await offerLevelConversion(rec);
     } else if (type === 'level_time') {
       await offerTimeRecovery(rec);
@@ -977,46 +987,149 @@ async function offerLevelConversion(ex) {
 // option existed: the level came across from Weight correctly, but the
 // minutes were left in Reps, which Level/Time doesn't show. Move them to Time.
 async function offerTimeRecovery(ex) {
-  const sets = (await setsForExercise(ex.id)).filter(hasStrandedRepsTime);
+  const sets = (await setsForExercise(ex.id)).filter(hasStrandedRepsTime)
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : (b.seq ?? 0) - (a.seq ?? 0)));
   if (!sets.length) return;
-  const preview = per => {
-    const fixed = sets.map(s => recoverRepsTime(s, per));
-    const t = fixed.map(s => s.time).sort((a, b) => a - b);
-    const ex1 = sets[0], f1 = fixed[0];
-    return `${sets.length} set${sets.length === 1 ? '' : 's'} → time `
-      + `${timeToString(t[0])}${t[t.length - 1] !== t[0] ? `–${timeToString(t[t.length - 1])}` : ''}. `
-      + `e.g. ${ex1.date}: level ${ex1.level}, ${ex1.reps} reps → level ${f1.level}, ${timeToString(f1.time)}`;
-  };
+  // Reps numbers that would make an implausibly long session are probably
+  // not minutes (a real rep count, a typo, a set from another exercise), so
+  // they start unticked and flagged for the user to look at.
+  const LONG_SEC = 90 * 60;
+  const picked = new Set(sets.filter(s => recoverRepsTime(s, 60).time <= LONG_SEC).map(s => s.id));
   await new Promise(resolve => {
     const { el, close } = openModal(`
       <h3>Recover missing times?</h3>
-      <p class="modal-body">${sets.length} set${sets.length === 1 ? '' : 's'} of <strong>${esc(ex.name)}</strong>
-        have no time but still have a number in Reps. They look like they were logged as
-        weight = level and reps = time. The level converted fine; this moves the Reps number into Time.</p>
+      <p class="modal-body">${sets.length} set${sets.length === 1 ? '' : 's'} of <strong>${esc(ex.name)}</strong> have no time but still have a number in Reps, as if logged as weight = level and reps = time. This moves the Reps number into Time; the level is already right.
+Untick any set that wasn't logged that way. Unticked sets are left as they are.</p>
       <label class="field-label">The Reps number was
         <select id="rec-unit" class="text-input">
           <option value="60" selected>Minutes</option>
           <option value="1">Seconds</option>
         </select>
       </label>
-      <p class="modal-body" id="rec-preview">${esc(preview(60))}</p>
+      <div class="rec-list" id="rec-list"></div>
+      <p class="modal-body" id="rec-summary"></p>
       <div class="modal-actions">
         <button class="btn btn-ghost" data-act="skip">Not now</button>
         <button class="btn btn-primary" data-act="fix">Recover</button>
       </div>`);
     const sel = el.querySelector('#rec-unit');
-    sel.onchange = () => { el.querySelector('#rec-preview').textContent = preview(Number(sel.value)); };
+    const list = el.querySelector('#rec-list');
+    const fixBtn = el.querySelector('[data-act=fix]');
+    const per = () => Number(sel.value);
+    const draw = () => {
+      list.innerHTML = sets.map(s => {
+        const t = recoverRepsTime(s, per()).time;
+        const long = t > LONG_SEC;
+        return `<label class="rec-row${long ? ' rec-long' : ''}">
+          <input type="checkbox" data-id="${s.id}" ${picked.has(s.id) ? 'checked' : ''}>
+          <span class="rec-date">${esc(s.date)}</span>
+          <span>Level ${s.level} · ${s.reps} reps → ${timeToString(t)}${long ? ' ⚠' : ''}</span>
+        </label>`;
+      }).join('');
+      list.querySelectorAll('input').forEach(cb => cb.onchange = () => {
+        const id = Number(cb.dataset.id);
+        if (cb.checked) picked.add(id); else picked.delete(id);
+        summarize();
+      });
+      summarize();
+    };
+    const summarize = () => {
+      const flagged = sets.filter(s => recoverRepsTime(s, per()).time > LONG_SEC).length;
+      el.querySelector('#rec-summary').textContent = `${picked.size} of ${sets.length} selected`
+        + (flagged ? ` · ⚠ ${flagged} would be over 90 min and ${flagged === 1 ? 'starts' : 'start'} unticked` : '');
+      fixBtn.disabled = !picked.size;
+    };
+    sel.onchange = draw;
+    draw();
     el.querySelector('[data-act=skip]').onclick = () => { close(); resolve(); };
-    el.querySelector('[data-act=fix]').onclick = async () => {
-      const per = Number(sel.value);
-      await db.bulkPut('sets', sets.map(s => recoverRepsTime(s, per)));
+    fixBtn.onclick = async () => {
+      const chosen = sets.filter(s => picked.has(s.id));
+      if (!chosen.length) return;
+      await db.bulkPut('sets', chosen.map(s => recoverRepsTime(s, per())));
       // Future FitNotes imports of this exercise use the matching rule.
-      if (per === 60) {
+      if (per() === 60) {
         const levelFrom = ex.levelFrom === 'weight_kg' ? 'weight_kg_time_reps' : 'weight_lbs_time_reps';
         await db.put('exercises', { ...ex, levelFrom });
       }
       close();
-      toast(`Recovered times on ${sets.length} sets`);
+      toast(`Recovered times on ${chosen.length} set${chosen.length === 1 ? '' : 's'}`);
+      resolve();
+    };
+  });
+}
+
+// Switching a level exercise to Level / Distance whose history kept the
+// distance or time in Reps (stationary bike: reps were tenths of a mile at
+// first, later minutes). The user picks the date the habit changed and the
+// average speed used to estimate distance for the minutes-only sets.
+const DEFAULT_MI_PER_MIN = 0.26;
+
+async function offerDistanceConversion(ex) {
+  const sets = (await setsForExercise(ex.id)).filter(needsDistance);
+  if (!sets.length) return;
+  const unit = distUnitLabel();
+  const fmtDist = m => `${fmtNum(mToDisplayDist(m))} ${unit}`;
+  const fmtSpeed = mPerMin => fmtNum(mToDisplayDist(mPerMin), 2);
+  let cutoff = biggestGapCutoff(sets) || '';
+  const fitted = () => fitMetersPerMin(sets, cutoff);
+  let speedFromData = fitted();
+  let metersPerMin = speedFromData || DEFAULT_MI_PER_MIN * 1609.344;
+  let speedTouched = false;
+
+  await new Promise(resolve => {
+    const { el, close } = openModal(`
+      <h3>Convert to distance?</h3>
+      <p class="modal-body">${sets.length} set${sets.length === 1 ? '' : 's'} of <strong>${esc(ex.name)}</strong> have no distance but have a number in Reps or a time. Before the switch date, Reps are read as tenths of a mile (34 → 3.4 mi). From that date on, Reps are minutes, and the distance is estimated from your average speed.</p>
+      <label class="field-label">Reps became minutes on
+        <input type="date" id="dc-cutoff" class="text-input" value="${esc(cutoff)}">
+      </label>
+      <label class="field-label">Average speed (${unit} per minute)
+        <input type="number" inputmode="decimal" step="0.01" min="0" id="dc-speed" class="text-input" value="${esc(fmtSpeed(metersPerMin))}">
+      </label>
+      <p class="modal-body" id="dc-speed-note"></p>
+      <div class="rec-list" id="dc-list"></div>
+      <p class="modal-body" id="dc-summary"></p>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" data-act="skip">Not now</button>
+        <button class="btn btn-primary" data-act="fix">Convert</button>
+      </div>`);
+    const cutIn = el.querySelector('#dc-cutoff');
+    const speedIn = el.querySelector('#dc-speed');
+    let plan = [];
+    const draw = () => {
+      plan = planDistanceConversion(sets, { cutoff, metersPerMin })
+        .sort((a, b) => (a.from.date < b.from.date ? 1 : a.from.date > b.from.date ? -1 : 0));
+      el.querySelector('#dc-speed-note').textContent = speedFromData
+        ? `Your rides before the switch that logged both average ${fmtSpeed(speedFromData)} ${unit}/min.`
+        : '';
+      el.querySelector('#dc-list').innerHTML = plan.map(p => `
+        <div class="rec-row">
+          <span class="rec-date">${esc(p.from.date)}</span>
+          <span>L${p.from.level || 0} · ${p.from.reps ? `${p.from.reps} reps` : timeToString(p.from.time)} →
+            ${p.mode === 'distance'
+              ? `${fmtDist(p.set.distance)}${p.set.time > 0 ? ` · ${timeToString(p.set.time)}` : ''}`
+              : `≈${fmtDist(p.set.distance)} · ${timeToString(p.set.time)}`}</span>
+        </div>`).join('');
+      const nd = plan.filter(p => p.mode === 'distance').length;
+      el.querySelector('#dc-summary').textContent =
+        `${nd} set${nd === 1 ? '' : 's'} read as distance, ${plan.length - nd} as minutes with an estimated distance (≈).`;
+    };
+    cutIn.onchange = () => {
+      cutoff = cutIn.value;
+      speedFromData = fitted();
+      if (!speedTouched && speedFromData) { metersPerMin = speedFromData; speedIn.value = fmtSpeed(metersPerMin); }
+      draw();
+    };
+    speedIn.oninput = () => {
+      const v = parseFloat(speedIn.value);
+      if (v > 0) { metersPerMin = displayDistToM(v); speedTouched = true; draw(); }
+    };
+    draw();
+    el.querySelector('[data-act=skip]').onclick = () => { close(); resolve(); };
+    el.querySelector('[data-act=fix]').onclick = async () => {
+      await db.bulkPut('sets', plan.map(p => p.set));
+      close();
+      toast(`Converted ${plan.length} set${plan.length === 1 ? '' : 's'} to distance`);
       resolve();
     };
   });
@@ -1117,7 +1230,7 @@ async function renderExercise(exerciseId, tab) {
 }
 
 async function renderTrackTab(body, ex) {
-  const isCardio = ex.type === 'distance_time';
+  const isCardio = typeUsesDist(ex.type);
   const usesLevel = typeUsesLevel(ex.type);
   const usesReps = typeUsesReps(ex.type);
   const usesTime = typeUsesTime(ex.type);
@@ -1433,6 +1546,13 @@ const GRAPH_METRICS = {
     ['maxTime', 'Max Time'],
     ['maxLevel', 'Max Level'],
   ],
+  level_distance: [
+    ['score', 'Score'],
+    ['distance', 'Distance'],
+    ['totalTime', 'Total Time'],
+    ['maxLevel', 'Max Level'],
+    ['pace', 'Pace'],
+  ],
 };
 const GRAPH_RANGES = [
   ['3m', '3M', 91], ['6m', '6M', 182], ['1y', '1Y', 365],
@@ -1605,9 +1725,19 @@ async function renderRecordsTab(body, ex) {
   // Set-numbered exercises: records are per workout, by how many sets
   // reached a value — the 3-set row is the most reps you hit on all of three
   // sets in one workout, so it never exceeds the 2-set row.
+  // What a level exercise's records measure: reps, time or distance.
+  const lm = {
+    level_reps: { val: s => s.reps, fmt: v => `${v} reps`, noun: 'reps', most: 'Most reps' },
+    level_time: { val: s => s.time, fmt: v => timeToString(v), noun: 'time', most: 'Longest time' },
+    level_distance: {
+      val: s => s.distance, fmt: v => `${fmtNum(mToDisplayDist(v))} ${distUnitLabel()}`,
+      noun: 'distance', most: 'Longest distance',
+    },
+  }[ex.type];
+
   if (typeUsesLevel(ex.type) && ex.levelKind !== 'resistance') {
     const isReps = ex.type === 'level_reps';
-    const fmtVal = v => (isReps ? `${v} reps` : timeToString(v));
+    const fmtVal = lm.fmt;
     const records = setCountRecords(sets, ex.type);
     const top = records.get(1);
     const longest = records.get(records.size); // the earliest workout with the most sets
@@ -1618,13 +1748,13 @@ async function renderRecordsTab(body, ex) {
     body.innerHTML = `
       <div class="records-wrap">
       <div class="stat-grid">
-        ${top ? tile(isReps ? 'Most reps' : 'Longest time', fmtVal(top.value), top.date) : ''}
+        ${top ? tile(lm.most, fmtVal(top.value), top.date) : ''}
         ${longest ? tile('Most sets', String(records.size), longest.date) : ''}
         ${lifetimeTile}
       </div>
       ${rows ? `
-        <div class="chart-title">Best ${isReps ? 'reps' : 'time'} across N sets</div>
-        <p class="rec-note">Each row is the best ${isReps ? 'rep count' : 'time'} every one of that many sets reached in a single workout.</p>
+        <div class="chart-title">Best ${lm.noun} across N sets</div>
+        <p class="rec-note">Each row is the best ${isReps ? 'rep count' : lm.noun} every one of that many sets reached in a single workout.</p>
         <table class="rec-table">
           <thead><tr><th>Sets</th><th>Best</th><th>Date</th></tr></thead>
           <tbody>${rows}</tbody>
@@ -1639,28 +1769,28 @@ async function renderRecordsTab(body, ex) {
     const bestByLevel = new Map(); // level -> best set
     let best = null, topLevel = null;
     for (const s of sets) {
-      const v = isReps ? s.reps : s.time;
+      const v = lm.val(s);
       if (!(v > 0)) continue;
       const lvl = s.level || 0;
       const cur = bestByLevel.get(lvl);
-      if (!cur || v > (isReps ? cur.reps : cur.time)) bestByLevel.set(lvl, s);
-      if (!best || v > (isReps ? best.reps : best.time)) best = s;
+      if (!cur || v > lm.val(cur)) bestByLevel.set(lvl, s);
+      if (!best || v > lm.val(best)) best = s;
       if (lvl > 0 && (!topLevel || lvl > (topLevel.level || 0))) topLevel = s;
     }
     const levelRows = [...bestByLevel.keys()].sort((a, b) => a - b).map(l => {
       const s = bestByLevel.get(l);
-      return `<tr><td>${l}</td><td>${isReps ? `${s.reps} reps` : timeToString(s.time)}</td><td class="rec-date">${esc(s.date)}</td></tr>`;
+      return `<tr><td>${l}</td><td>${lm.fmt(lm.val(s))}</td><td class="rec-date">${esc(s.date)}</td></tr>`;
     }).join('');
     body.innerHTML = `
       <div class="records-wrap">
       <div class="stat-grid">
-        ${best ? tile(isReps ? 'Most reps' : 'Longest time',
-          isReps ? `${best.reps} × ${noun.toLowerCase()} ${best.level || 0}` : timeToString(best.time), best.date) : ''}
+        ${best ? tile(lm.most,
+          isReps ? `${best.reps} × ${noun.toLowerCase()} ${best.level || 0}` : lm.fmt(lm.val(best)), best.date) : ''}
         ${topLevel ? tile(`Highest ${noun.toLowerCase()}`, String(topLevel.level), topLevel.date) : ''}
         ${lifetimeTile}
       </div>
       ${levelRows ? `
-        <div class="chart-title">Best ${isReps ? 'reps' : 'time'} per ${noun.toLowerCase()}</div>
+        <div class="chart-title">Best ${lm.noun} per ${noun.toLowerCase()}</div>
         <table class="rec-table">
           <thead><tr><th>${noun}</th><th>Best</th><th>Date</th></tr></thead>
           <tbody>${levelRows}</tbody>

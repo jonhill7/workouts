@@ -22,7 +22,8 @@ export function splitWorkouts(sortedSets) {
   return workouts;
 }
 
-const levelValueOf = type => (type === 'level_time' ? s => s.time : s => s.reps);
+const levelValueOf = type => (type === 'level_time' ? s => s.time
+  : type === 'level_distance' ? s => s.distance : s => s.reps);
 
 // A workout's value for every set count: thresholds[n-1] is the n-th highest
 // value logged in it, i.e. the largest threshold that at least n of its sets
@@ -81,8 +82,9 @@ export function computePRIds(sortedSets, type, levelKind) {
   // says nothing about your band-1 record.
   if (LEVEL_TYPES.has(type)) {
     const bestByLevel = new Map();
+    const valueOf = levelValueOf(type);
     for (const s of sortedSets) {
-      const v = type === 'level_reps' ? s.reps : s.time;
+      const v = valueOf(s);
       if (!(v > 0)) continue;
       const lvl = s.level || 0;
       const prev = bestByLevel.get(lvl) || 0;
@@ -170,7 +172,7 @@ export function setCountRecords(sortedSets, type) {
 //                    short run and a slow long one compare fairly. Without
 //                    any distance+time set it scores by distance, then time.
 //   set # × reps     reps (or time) in one set
-//   resistance level level × minutes (or level × reps) in one set, so
+//   resistance level level × minutes (or × distance, or × reps) in one set, so
 //                    harder levels count for more. Assumes a higher level is
 //                    harder, as on machines (elliptical, bike).
 //
@@ -203,9 +205,10 @@ export function scoreInfo(sets, type, levelKind) {
   }
   if (LEVEL_TYPES.has(type)) {
     const valueOf = levelValueOf(type);
-    const mode = type === 'level_time' ? 'time' : 'reps';
+    const mode = type === 'level_time' ? 'time' : type === 'level_distance' ? 'distance' : 'reps';
     if (levelKind !== 'resistance') return { mode, scoreOf: valueOf };
     if (type === 'level_time') return { mode: 'levelTime', scoreOf: s => ((s.level || 0) * s.time) / 60 };
+    if (type === 'level_distance') return { mode: 'levelDistance', scoreOf: s => (s.level || 0) * (s.distance || 0) };
     return { mode: 'levelReps', scoreOf: s => (s.level || 0) * s.reps };
   }
   if (sets.some(s => s.weight > 0 && s.reps > 0)) return { mode: 'e1rm', scoreOf: s => epley1RM(s.weight, s.reps) };
