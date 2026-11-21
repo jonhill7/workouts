@@ -24,6 +24,20 @@ test('weight_reps PRs: heavier at same-or-more reps, first record never counts',
   assert.deepEqual([...prs].sort(), [sets[1].id, sets[2].id].sort());
 });
 
+// User report: Chest Supported Dumbbell Row 20 lbs × 10, 10, then 20 lbs × 12
+// two years later got no trophy — no earlier set had 12+ reps, so there was
+// no weight to beat. More reps at the same weight is a rep PR.
+test('weight_reps PRs: more reps at the same weight', () => {
+  const lb = 0.45359237;
+  const sets = [
+    set('2024-12-18', 20 * lb, 10), set('2024-12-18', 20 * lb, 10),
+    set('2026-11-21', 20 * lb, 12), // rep PR at 20 lbs
+    set('2026-11-22', 20 * lb, 11), // fewer than 12: not a PR
+    set('2026-11-23', 15 * lb, 15), // first time at 15 lbs: nothing to beat
+  ];
+  assert.deepEqual([...computePRIds(sets, 'weight_reps')], [sets[2].id]);
+});
+
 // User report: Shrugs history showed trophies on PR days, but Records listed
 // only a single rep record — every heavier-day set was at 13+ reps, and the
 // table used to drop anything above 12 reps.
