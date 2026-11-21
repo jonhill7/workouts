@@ -13,29 +13,36 @@ let nextId = 0;
 const set = (date, weightKg, reps, extra = {}) =>
   ({ id: ++nextId, date, weight: weightKg, reps, distance: 0, time: 0, level: 0, seq: nextId, ...extra });
 
-test('weight_reps PRs: heavier at same-or-more reps, first record never counts', () => {
+test('weight_reps PRs: heavier at same-or-more reps, or a new rep count', () => {
   const sets = [
-    set('2024-01-01', 40, 10),
+    set('2024-01-01', 40, 10), // first set ever: new rep count
     set('2024-01-08', 45, 10), // beats 40x10
-    set('2024-01-15', 50, 8),  // beats 45 lifted for >=8 reps
+    set('2024-01-15', 50, 8),  // first 8-rep set (also beats 45 for >=8 reps)
     set('2024-01-22', 48, 8),  // below the 50x8 record
+    set('2024-01-29', 30, 10), // 10 reps done before, lighter: not a PR
   ];
   const prs = computePRIds(sets, 'weight_reps');
-  assert.deepEqual([...prs].sort(), [sets[1].id, sets[2].id].sort());
+  assert.deepEqual([...prs].sort((a, b) => a - b), [sets[0].id, sets[1].id, sets[2].id]);
 });
 
 // User report: Chest Supported Dumbbell Row 20 lbs × 10, 10, then 20 lbs × 12
 // two years later got no trophy — no earlier set had 12+ reps, so there was
-// no weight to beat. More reps at the same weight is a rep PR.
-test('weight_reps PRs: more reps at the same weight', () => {
+// no weight to beat. More reps at the same weight is a rep PR, and so is the
+// first set ever at a rep count (including the exercise's very first set).
+test('weight_reps PRs: more reps at the same weight, first time at a rep count', () => {
   const lb = 0.45359237;
   const sets = [
-    set('2024-12-18', 20 * lb, 10), set('2024-12-18', 20 * lb, 10),
-    set('2026-11-21', 20 * lb, 12), // rep PR at 20 lbs
-    set('2026-11-22', 20 * lb, 11), // fewer than 12: not a PR
-    set('2026-11-23', 15 * lb, 15), // first time at 15 lbs: nothing to beat
+    set('2024-12-18', 20 * lb, 10), // first set: PR
+    set('2024-12-18', 20 * lb, 10), // repeat: not a PR
+    set('2026-11-21', 20 * lb, 12), // first 12-rep set, and more reps at 20 lbs
+    set('2026-11-22', 20 * lb, 11), // first 11-rep set: PR
+    set('2026-11-23', 20 * lb, 11), // repeat: not a PR
+    set('2026-11-24', 25 * lb, 12), // heavier for 12: PR
+    set('2026-11-25', 25 * lb, 13), // first 13: PR (and more reps at 25 lbs)
+    set('2026-11-26', 15 * lb, 12), // lighter for 12, first time at 15 lbs: not a PR
   ];
-  assert.deepEqual([...computePRIds(sets, 'weight_reps')], [sets[2].id]);
+  assert.deepEqual([...computePRIds(sets, 'weight_reps')],
+    [sets[0].id, sets[2].id, sets[3].id, sets[5].id, sets[6].id]);
 });
 
 // User report: Shrugs history showed trophies on PR days, but Records listed
