@@ -55,8 +55,9 @@ any prior CSV import), per-exercise notes, and routines.
   per-exercise notes (setup, seat height…), workout-count + recency stats,
   and A–Z / Recent / Most-used sorting
 - **PR detection**: 🏆 marks any set that beats your previous best weight at
-  the same or higher reps (longest distance/duration for cardio), with a
-  toast the moment you log one
+  the same or higher reps, beats your most reps at that weight, or is your
+  first set ever at that rep count (longest distance/duration for cardio),
+  with a toast the moment you log one
 - **Guided classes**: five preloaded class-style programs — 💪 *Total Body*,
   🏋️ *Pump* (high-rep sculpt), 🧘 *Flow* (stretch & mobility), 🎯 *Core*, and
   ❤️‍🔥 *Burn* (cardio intervals) — each in three difficulty levels (Beginner

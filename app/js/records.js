@@ -35,9 +35,12 @@ function workoutThresholds(sets, valueOf) {
 
 // PR detection. Walk the exercise's sets in chronological order; a strength
 // set is a PR when its weight beats every earlier weight lifted for the same
-// or more reps ("you've never lifted this much for this many reps"). Cardio:
-// longest distance ever (or longest duration for distance-less sets). The
-// very first record for an exercise never counts.
+// or more reps ("you've never lifted this much for this many reps"), or when
+// it beats the most reps ever done at that same weight (20 lbs × 12 after
+// 20 lbs × 10 — a rep PR), or when it's the first set ever at its rep count
+// (so the very first set of an exercise is a PR too, and every rep count in
+// the Records tab starts with a trophy). Cardio: longest distance ever (or
+// longest duration for distance-less sets); the very first set doesn't count.
 //
 // levelKind only matters for level types: 'resistance' compares within a
 // level, anything else treats the level as a set number (see splitWorkouts).
@@ -94,12 +97,17 @@ export function computePRIds(sortedSets, type, levelKind) {
     return ids;
   }
   const bestByReps = new Map();
+  const repsByWeight = new Map(); // weight (rounded, kg) -> most reps ever done at it
+  const wKey = w => Math.round(w * 1000);
   for (const s of sortedSets) {
     if (!(s.weight > 0) || !(s.reps > 0)) continue;
     let prev = 0;
     for (const [r, w] of bestByReps) if (r >= s.reps && w > prev) prev = w;
-    if (prev > 0 && s.weight > prev + 1e-9) ids.add(s.id);
+    const prevReps = repsByWeight.get(wKey(s.weight)) || 0;
+    const newRepCount = !bestByReps.has(s.reps);
+    if (newRepCount || (prev > 0 && s.weight > prev + 1e-9) || (prevReps > 0 && s.reps > prevReps)) ids.add(s.id);
     if (s.weight > (bestByReps.get(s.reps) || 0)) bestByReps.set(s.reps, s.weight);
+    if (s.reps > prevReps) repsByWeight.set(wKey(s.weight), s.reps);
   }
   return ids;
 }
